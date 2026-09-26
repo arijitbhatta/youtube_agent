@@ -1,0 +1,11 @@
+{
+  "persona_id": "pytorch_advanced_narrow",
+  "goal": "Optimize a PyTorch training loop on a single GPU -- mixed precision, gradient accumulation, memory profiling",
+  "time_budget_minutes": 180,
+  "user_context": {
+    "background": "Experienced ML engineer, has trained many models, comfortable with PyTorch internals",
+    "known": ["PyTorch basics", "training loops", "backprop", "standard optimizers"],
+    "unknown": ["mixed precision training", "gradient accumulation", "GPU memory profiling", "single-GPU throughput optimization"],
+    "constraints": "Only want post-2023 content -- older PyTorch APIs are stale for this. Skip beginner-pitched intros to what a GPU is."
+  }
+}

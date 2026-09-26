@@ -1,0 +1,20 @@
+services:
+  # One-shot: docker compose run cli --input test_set/01_weekend_react_dev.json
+  cli:
+    build: .
+    env_file: .env
+    volumes:
+      - ./outputs:/app/outputs
+    entrypoint: ["python", "run.py"]
+
+  # docker compose up ui -- same image, same on-disk cache, run.py's entrypoint
+  # instead of graph internals (ui/app.py imports run_from_payload directly,
+  # no logic duplicated here).
+  ui:
+    build: .
+    env_file: .env
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./outputs:/app/outputs
+    command: ["streamlit", "run", "ui/app.py", "--server.address=0.0.0.0"]

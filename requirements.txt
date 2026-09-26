@@ -1,0 +1,12 @@
+openai>=1.50   # OpenRouter is OpenAI-Chat-Completions-compatible; see agent/llm_client.py
+langgraph>=0.2
+pydantic>=2
+yt-dlp>=2024.10
+sentence-transformers>=3.0   # dedup embeddings (all-MiniLM-L6-v2), §3.5 --
+                              # if torch fails to install on this Python
+                              # version, swap this line for fastembed>=0.4
+                              # and see dedup.py's loader
+streamlit>=1.38
+python-dotenv>=1.0
+pytest>=8.0
+numpy>=1.26

@@ -1,0 +1,11 @@
+{
+  "persona_id": "ml_from_scratch_infeasible",
+  "goal": "Learn machine learning from scratch, math to deployment",
+  "time_budget_minutes": 30,
+  "user_context": {
+    "background": "No math or programming background beyond spreadsheets",
+    "known": [],
+    "unknown": ["linear algebra basics", "probability/statistics", "Python for ML", "supervised learning", "model training", "model deployment"],
+    "constraints": ""
+  }
+}

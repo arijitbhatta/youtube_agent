@@ -1,0 +1,11 @@
+{
+  "persona_id": "accessible_content_constraint",
+  "goal": "Learn SQL well enough to write joins and subqueries for reporting at work",
+  "time_budget_minutes": 150,
+  "user_context": {
+    "background": "Data analyst, comfortable with spreadsheets and basic SELECT/WHERE queries",
+    "known": ["basic SELECT/WHERE", "spreadsheets"],
+    "unknown": ["joins", "subqueries", "aggregation with GROUP BY", "window functions"],
+    "constraints": "I'm deaf -- please only consider videos that have accurate captions/subtitles available, not auto-generated gibberish. Skip anything that's mostly the presenter talking over a static slide with no on-screen text of what's being said."
+  }
+}

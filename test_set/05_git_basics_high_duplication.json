@@ -1,0 +1,11 @@
+{
+  "persona_id": "git_basics_high_duplication",
+  "goal": "Git basics for a new job -- branching, merging, resolving conflicts, working with a shared remote",
+  "time_budget_minutes": 90,
+  "user_context": {
+    "background": "Bootcamp grad, has used git add/commit/push but never branched or resolved a conflict",
+    "known": ["git add, commit, push", "basic CLI"],
+    "unknown": ["branching", "merging", "resolving conflicts", "working with a shared remote/PRs"],
+    "constraints": "Not another 'what is version control' overview -- I already use git day to day, just never branched."
+  }
+}

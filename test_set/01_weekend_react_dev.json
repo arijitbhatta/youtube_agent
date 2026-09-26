@@ -1,0 +1,11 @@
+{
+  "persona_id": "weekend_react_dev",
+  "goal": "Build a small React app this weekend, something like a habit tracker with local storage",
+  "time_budget_minutes": 360,
+  "user_context": {
+    "background": "Python backend engineer, 5 years experience",
+    "known": ["JavaScript fundamentals", "HTTP, REST, JSON", "Git, npm"],
+    "unknown": ["React", "JSX", "Vite tooling", "React hooks", "Component patterns"],
+    "constraints": "I prefer project-based content. Avoid pure-theory lectures and 'in 100 seconds' surface intros."
+  }
+}

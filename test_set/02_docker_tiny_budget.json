@@ -1,0 +1,11 @@
+{
+  "persona_id": "docker_tiny_budget",
+  "goal": "What is Docker, and run my first container",
+  "time_budget_minutes": 45,
+  "user_context": {
+    "background": "Complete beginner to infrastructure/DevOps -- has only written application code before",
+    "known": [],
+    "unknown": ["what a container is", "what Docker is for", "running a container locally"],
+    "constraints": ""
+  }
+}
