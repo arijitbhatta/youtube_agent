@@ -1,32 +1,26 @@
 """Metadata + transcript fetch (HLD.md §3.3) -- download-free as a hard
 constraint (CLAUDE.md), not an implementation detail. yt-dlp is only ever
-used in extract_info(download=False)/skip_download=True modes here; the
-caption *file* itself is small text, fetched directly over HTTP once
-yt-dlp has told us its URL -- no video/audio bytes ever touched.
+used in extract_info(download=False) mode here, for real title/channel/
+duration/upload_date/description -- none of which the transcript library
+below provides. The transcript itself comes from `youtube-transcript-api`
+(SKILLS.md #15), which talks to YouTube's caption endpoint directly rather
+than through yt-dlp's caption-URL indirection; still no video/audio bytes
+touched either way.
 """
 from __future__ import annotations
 
-import re
+import random
 import time
-import urllib.error
-import urllib.request
 
 import yt_dlp
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import CouldNotRetrieveTranscript
 
 from agent.schemas import Candidate
 
 MAX_TRANSCRIPT_CHARS = 12_000  # even spread across the video, not a truncation
 
-# YouTube's caption/timedtext CDN (distinct from the main video-info
-# endpoint) rate-limits with a plain 429 under sustained request volume --
-# seen live, repeatedly, during this session's own testing (a fresh,
-# unrelated, extremely popular video's caption download still 429'd, so
-# it's IP-level throttling, not a per-video quirk). A short bounded backoff
-# is the canonical response to a 429; this is not the open-ended retry
-# CLAUDE.md warns against -- it's 2 extra attempts, then give up and flag
-# grounded: false same as a genuinely missing transcript.
-_CAPTION_FETCH_RETRIES = 2
-_CAPTION_FETCH_BACKOFF_SECONDS = (2, 5)
+_transcript_api = YouTubeTranscriptApi()
 
 
 def _ydl_opts() -> dict:
@@ -48,26 +42,26 @@ def _ydl_opts() -> dict:
     }
 
 
-def _clean_vtt(raw: str) -> str:
-    """Strip WebVTT timestamps/cues down to plain spoken text."""
-    lines = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line or line.startswith(("WEBVTT", "Kind:", "Language:")):
-            continue
-        if "-->" in line:
-            continue
-        if re.match(r"^\d+$", line):
-            continue
-        line = re.sub(r"<[^>]+>", "", line)
-        if line:
-            lines.append(line)
-    # auto-captions repeat the previous line as a rolling-window artifact
-    deduped = []
-    for line in lines:
-        if not deduped or deduped[-1] != line:
-            deduped.append(line)
-    return " ".join(deduped)
+def _fetch_transcript_text(video_id: str) -> str | None:
+    try:
+        # Jittered 1.5-5s pause before each caption-CDN request. The throttle
+        # is IP-level and persistent (SKILLS.md #15), so this doesn't clear
+        # the block by itself -- it just spaces requests out instead of
+        # hammering the endpoint back-to-back.
+        time.sleep(random.uniform(1.5, 5.0))
+        fetched = _transcript_api.fetch(video_id, languages=["en"])
+    except CouldNotRetrieveTranscript:
+        # Covers every documented failure mode of this library (disabled
+        # captions, no English track, unavailable video, and IP-level
+        # blocking -- the same caption-CDN throttling previously seen via
+        # yt-dlp's raw VTT fetch, still present here under a different
+        # exception type; see SKILLS.md #15). Degrades the same way a
+        # genuinely missing transcript does (grounded: false downstream).
+        return None
+    except Exception:
+        return None
+    text = " ".join(snippet.text for snippet in fetched if snippet.text.strip())
+    return text or None
 
 
 def _downsample(text: str, max_chars: int) -> str:
@@ -106,26 +100,9 @@ def fetch_metadata_and_transcript(candidate: Candidate) -> Candidate | None:
     except yt_dlp.utils.DownloadError:
         return None
 
-    transcript_text = None
-    subs = {**(info.get("subtitles") or {}), **(info.get("automatic_captions") or {})}
-    en_tracks = subs.get("en") or []
-    vtt_track = next((t for t in en_tracks if t.get("ext") == "vtt"), None)
-    if vtt_track:
-        raw_vtt = None
-        for attempt in range(_CAPTION_FETCH_RETRIES + 1):
-            try:
-                with urllib.request.urlopen(vtt_track["url"], timeout=15) as response:
-                    raw_vtt = response.read().decode("utf-8", errors="replace")
-                break
-            except urllib.error.HTTPError as exc:
-                if exc.code == 429 and attempt < _CAPTION_FETCH_RETRIES:
-                    time.sleep(_CAPTION_FETCH_BACKOFF_SECONDS[attempt])
-                    continue
-                break
-            except Exception:
-                break
-        if raw_vtt:
-            transcript_text = _downsample(_clean_vtt(raw_vtt), MAX_TRANSCRIPT_CHARS)
+    transcript_text = _fetch_transcript_text(candidate.video_id)
+    if transcript_text:
+        transcript_text = _downsample(transcript_text, MAX_TRANSCRIPT_CHARS)
 
     return candidate.model_copy(
         update={

@@ -12,16 +12,16 @@ from agent.schemas import Candidate
 SEARCH_RESULTS_PER_QUERY = 40
 MIN_DURATION_MINUTES = 1.5  # drops shorts / zero-duration live streams
 
-# HLD §8's cost model assumes ~40-80 filtered candidates feeding the
-# expensive per-candidate yt-dlp fetch + batched understanding stages (seen
-# live: with a generous budget the duration-based cheap filter barely
-# narrows anything, so 7 queries x 40 results/query produced 245 unique
-# candidates -- 245 sequential yt-dlp detail fetches and ~49 understanding
-# batches instead of the intended ~8-16). Capping here, not by lowering
-# SEARCH_RESULTS_PER_QUERY, so each query still gets a fair, deep look
-# before the round-robin interleave below decides which of its results
-# actually survive to the expensive stages.
-MAX_TOTAL_CANDIDATES = 80
+# HLD §8's cost model assumes ~40 filtered candidates feeding the expensive
+# per-candidate yt-dlp fetch + batched understanding stages -- lowered from
+# 80 alongside query_planning.py's query count (8 -> 4-5): fewer, more
+# targeted queries means less need for a large cap to protect against query
+# fan-out, and halving the fetch/understanding volume is a direct latency
+# and cost win on every run (seen live: fetch was the single slowest stage).
+# Capping here, not by lowering SEARCH_RESULTS_PER_QUERY, so each query
+# still gets a fair, deep look before the round-robin interleave below
+# decides which of its results actually survive to the expensive stages.
+MAX_TOTAL_CANDIDATES = 40
 
 
 def _ydl_opts() -> dict:

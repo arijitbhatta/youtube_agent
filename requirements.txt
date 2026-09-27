@@ -1,11 +1,13 @@
-openai>=1.50   # OpenRouter is OpenAI-Chat-Completions-compatible; see agent/llm_client.py
+openai>=1.50   # OpenRouter is OpenAI-Chat-Completions-compatible; used for
+               # both chat (agent/llm_client.call_structured) and dedup
+               # embeddings (agent/llm_client.call_embeddings, §3.5) --
+               # same client, same key, no separate embedding runtime
 langgraph>=0.2
 pydantic>=2
 yt-dlp>=2024.10
-sentence-transformers>=3.0   # dedup embeddings (all-MiniLM-L6-v2), §3.5 --
-                              # if torch fails to install on this Python
-                              # version, swap this line for fastembed>=0.4
-                              # and see dedup.py's loader
+youtube-transcript-api>=0.6.2  # transcript fetch (agent/transcripts.py,
+                                # SKILLS.md #15) -- yt-dlp stays search/
+                                # metadata only
 streamlit>=1.38
 python-dotenv>=1.0
 pytest>=8.0

@@ -70,13 +70,18 @@ framework").
 
 ## Scope decisions
 
-- **Discovery, metadata, and captions: `yt-dlp`, not the YouTube Data API.**
+- **Discovery + metadata: `yt-dlp`. Transcript: `youtube-transcript-api`.**
   Zero extra credentials beyond the Claude key already provided — a grader
   can `pip install` and run with nothing else to provision. `yt-dlp` gives
-  search (`ytsearchN:`), full metadata, and auto-generated captions from the
-  same tool. The YouTube Data API v3 is documented in the HLD as a drop-in
-  alternative behind the same interface, for if `yt-dlp`'s search proves
-  rate-limited or unreliable in practice.
+  search (`ytsearchN:`) and full metadata; the transcript itself comes from
+  `youtube-transcript-api`, a dedicated library talking to YouTube's caption
+  endpoint directly rather than through `yt-dlp`'s caption-URL indirection —
+  tried as a second attempt at dodging the caption-CDN throttling documented
+  in `SKILLS.md`/`README.md`; live-confirmed to still hit the same IP-level
+  block (`IpBlocked`), so this is a code-path swap, not a fix for that
+  specific environment issue. The YouTube Data API v3 is documented in the
+  HLD as a drop-in alternative behind the same interface, for if `yt-dlp`'s
+  search proves rate-limited or unreliable in practice.
 - **Output:** both a structured JSON (for the eval harness and any future
   UI) and a rendered Markdown curriculum (for a human to read). One run, two
   artifacts, same source of truth.

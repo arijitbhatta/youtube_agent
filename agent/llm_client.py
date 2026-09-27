@@ -11,12 +11,13 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Literal, Type, TypeVar
+from typing import Iterator, Literal, Type, TypeVar
 
+import numpy as np
 import openai
 from pydantic import BaseModel, ValidationError
 
-from agent.config import MODEL_CHEAP, MODEL_STRONG, OPENROUTER_BASE_URL
+from agent.config import MODEL_CHEAP, MODEL_EMBEDDING, MODEL_STRONG, OPENROUTER_BASE_URL
 
 T = TypeVar("T", bound=BaseModel)
 Tier = Literal["cheap", "strong"]
@@ -155,3 +156,86 @@ def call_structured(
     raise RuntimeError(
         f"call_structured failed after 2 attempts for {schema.__name__}: {last_error}"
     )
+
+
+def stream_text(
+    prompt: str,
+    *,
+    system: str | None = None,
+    tier: Tier = "strong",
+    max_tokens: int = 1024,
+    trace=None,
+    trace_label: str | None = None,
+) -> Iterator[str]:
+    """One plain-text (non-tool) completion, streamed: yields the model's text
+    as it is produced (the UI follow-up chat's typewriter effect) and logs the
+    call's usage/latency to `trace` once the stream finishes. No bounded retry
+    the way `call_structured` has -- there is no schema to validate here, so a
+    malformed completion isn't a failure mode; a mid-stream transport error just
+    surfaces to the caller."""
+    model = _model_for(tier)
+    messages = [{"role": "system", "content": system}] if system else []
+    messages.append({"role": "user", "content": prompt})
+
+    start = time.monotonic()
+    stream = _get_client().chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=messages,
+        stream=True,
+        # include_usage makes the final chunk carry prompt/completion token
+        # totals; without it streamed responses report usage=None.
+        stream_options={"include_usage": True},
+    )
+    input_tokens = 0
+    output_tokens = 0
+    for chunk in stream:
+        if chunk.usage is not None:
+            input_tokens = chunk.usage.prompt_tokens or 0
+            output_tokens = chunk.usage.completion_tokens or 0
+        if chunk.choices:
+            delta = chunk.choices[0].delta
+            if delta is not None and delta.content:
+                yield delta.content
+    latency = time.monotonic() - start
+    if trace is not None:
+        trace.log_llm_call(
+            label=trace_label or "stream_text",
+            model=model,
+            tier=tier,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_seconds=latency,
+            attempt=1,
+        )
+
+
+def call_embeddings(
+    texts: list[str], *, trace=None, trace_label: str | None = None
+) -> np.ndarray:
+    """Batched embedding call via OpenRouter's OpenAI-compatible /embeddings
+    endpoint (agent/dedup.py's clustering, eval/run_eval.py's independent
+    coverage cross-check) -- returns L2-normalized vectors so callers can
+    take a plain dot product as cosine similarity, same contract the prior
+    local model provided.
+    """
+    start = time.monotonic()
+    response = _get_client().embeddings.create(model=MODEL_EMBEDDING, input=texts)
+    latency = time.monotonic() - start
+
+    if trace is not None:
+        usage = response.usage
+        trace.log_llm_call(
+            label=trace_label or "embedding",
+            model=MODEL_EMBEDDING,
+            tier="embedding",
+            input_tokens=usage.prompt_tokens if usage else 0,
+            output_tokens=0,
+            latency_seconds=latency,
+            attempt=1,
+        )
+
+    vectors = np.array([d.embedding for d in response.data], dtype=np.float64)
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return vectors / norms

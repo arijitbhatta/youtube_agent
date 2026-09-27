@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from agent.llm_client import call_structured
 from agent.schemas import PersonaInput
 
-_PROMPT_TEMPLATE = """Given this learner's goal and context, produce 4 to 8 \
+_PROMPT_TEMPLATE = """Given this learner's goal and context, produce 4 to 5 \
 targeted YouTube search queries that would surface videos to build a \
 curriculum from. Decompose by the learner's `unknown` items -- one query \
 per unknown item where that makes sense -- plus one or two queries phrased \
@@ -25,7 +25,7 @@ constraints: {constraints}
 
 
 class QueryPlan(BaseModel):
-    queries: list[str] = Field(min_length=4, max_length=8)
+    queries: list[str] = Field(min_length=4, max_length=5)
 
 
 def plan_queries(input_payload: PersonaInput, *, trace=None) -> list[str]:

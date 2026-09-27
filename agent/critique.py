@@ -15,7 +15,7 @@ the model nicely not to override it (CLAUDE.md principle #2).
 from __future__ import annotations
 
 from eval import metrics
-from agent.llm_client import call_structured
+from agent.llm_client import Tier, call_structured
 from agent.schemas import (
     CurriculumOutput,
     PersonaInput,
@@ -174,6 +174,7 @@ def llm_judgment(
     output: CurriculumOutput,
     deterministic: list[ReviewIssue],
     *,
+    tier: Tier = "strong",
     trace=None,
 ) -> ReviewVerdict:
     items_block = "\n---\n".join(_format_item(item) for item in output.curriculum)
@@ -190,7 +191,7 @@ def llm_judgment(
     return call_structured(
         prompt,
         ReviewVerdict,
-        tier="strong",
+        tier=tier,
         system=_SYSTEM,
         max_tokens=4096,
         trace=trace,
@@ -204,16 +205,20 @@ def evaluate(
     picks_in_order: list[ScoredCandidate],
     candidate_pool: list[ScoredCandidate],
     *,
+    tier: Tier = "strong",
     trace=None,
 ) -> ReviewVerdict:
     """The one entrypoint both agent/review.py and eval/judge.py call.
     Deterministic failures are computed first and can never be dismissed:
     `approved` is forced False whenever any exist, or whenever the LLM's
     own verdict raised a blocking issue, regardless of the LLM's own
-    top-level `approved` field."""
+    top-level `approved` field. `tier` defaults to "strong" (eval/judge.py's
+    offline grading stays untouched, per CLAUDE.md's "the eval is graded
+    most carefully"); agent/review.py's online path passes tier="cheap"
+    explicitly."""
     det_issues = deterministic_issues(output, picks_in_order, candidate_pool)
     try:
-        llm_verdict = llm_judgment(input_payload, output, det_issues, trace=trace)
+        llm_verdict = llm_judgment(input_payload, output, det_issues, tier=tier, trace=trace)
     except RuntimeError:
         # Same graceful-degradation shape as agent/narrative.py's fallback:
         # a flaky judgment call must not crash an otherwise-complete run.

@@ -1,162 +1,218 @@
 """Follow-up Q&A over a finished run's trace (HLD.md §5.1). Not a second
 retrieval or judgment pass -- a read path over data the pipeline already
-computed. Resolving which video a question is about is deterministic
-(exact video_id/URL, else fuzzy title match against everything this run
-ever saw); the one Claude call that follows only phrases the already-
-assembled record it's handed, and is told never to guess beyond it.
+computed. The whole answer is grounded in one assembled "run summary": a
+learner-facing digest of the goal, the ordered plan, the selection logic,
+and every video the run looked at (with topics and outcome). The summary is
+assembled deterministically from the trace and *cleansed* of internal
+details (transcripts, accuracy flags, numeric scores) so the phrasing model
+is never handed — and therefore never parrots — anything the learner
+shouldn't see.
 
-`ui/app.py` (HLD §5.2) wraps `answer_question` directly as its chat layer --
-no new pipeline logic there either.
+`ui/app.py` (HLD §5.2) wraps `answer_question_stream` directly as its chat
+layer -- no new pipeline logic there either.
 """
 from __future__ import annotations
 
-import re
+from typing import Iterator
 
-from agent.llm_client import call_structured
+from agent.llm_client import call_structured, stream_text
 from agent.schemas import FollowupAnswer
 from agent.trace import Trace
 
-_VIDEO_ID_RE = re.compile(r"(?:v=|youtu\.be/|\b)([A-Za-z0-9_-]{11})\b")
+# Plain-language digest of the deterministic selection logic (agent/scoring.py
+# + agent/selection.py), so "how was my plan chosen?" is answerable without
+# the model inventing a rule. This is static system knowledge about the
+# pipeline's own fixed algorithm, not per-run data.
+_HOW_CHOSEN = (
+    "Videos matching the goal and the topics the learner wants to learn are "
+    "searched for, and what each video actually covers is read. Each video is "
+    "scored for how well it matches the topics the learner wants to learn, "
+    "with novelty counted so it isn't just re-covering what the learner "
+    "already knows; a video is penalized for going over things the learner "
+    "already knows or for violating a stated constraint, and adjusted for "
+    "clarity and how much it actually teaches. Near-duplicate videos are "
+    "grouped, and only the strongest of each group is kept. Videos are then "
+    "picked greedily in order of value-per-minute of the learner's time until "
+    "the time budget is spent; if one of the learner's target topics is still "
+    "uncovered after that, the weakest pick is swapped for the strongest video "
+    "covering the missed topic. Finally the chosen videos are ordered so the "
+    "learning flows from setup through core concepts to hands-on practice and "
+    "advanced follow-ups."
+)
 
-# Seen live: raw character-level similarity (difflib.SequenceMatcher) between
-# a whole question and a short title clears a naive 0.35 threshold on pure
-# noise -- common short words ("the", "in", "to"...) contribute matching
-# runs even when the question is about a completely different video. Word-
-# overlap against the TITLE's distinctive words only is much harder to
-# false-positive on, since a title has few enough words that noise doesn't
-# accumulate the way character n-grams do.
-_STOPWORDS = {
-    "the", "a", "an", "in", "on", "to", "of", "is", "are", "was", "wasn't",
-    "did", "didn't", "does", "doesn't", "do", "you", "it", "that", "this",
-    "not", "why", "how", "for", "and", "or", "with", "at", "by", "i", "have",
-    "has", "had", "include", "included", "pick", "picked", "choose", "chose",
-    "video", "about",
-}
-
-# Fraction of the TITLE's significant words that must appear in the
-# question. Below this, a fuzzy match is more likely noise than signal --
-# the question gets treated as "never discovered" instead of guessing.
-_MATCH_THRESHOLD = 0.6
-
-
-def _significant_words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _STOPWORDS and len(w) > 2}
-
-_SYSTEM = """You answer a learner's question about a curriculum-building \
-run that has already finished. You are given the one structured record \
-relevant to their question -- everything this run knows about that video: \
-its score, its cluster, whether it was selected, dropped, or excluded by \
-review, and why. Phrase a direct answer from that record only. Never \
-invent a reason, a score, or an outcome that isn't in the record. If the \
-record says the video was never found by this run's search, say exactly \
-that -- do not speculate about why it might have been excluded."""
+_SYSTEM = """You are a friendly, warm assistant explaining a learner's \
+finished video-learning plan. Answer ONLY from the "RUN SUMMARY" you are \
+given -- never invent a video, topic, reason, score, or outcome that isn't \
+there. Never mention transcripts, metadata, accuracy flags, or numeric \
+scores; speak in plain, learner-friendly terms and name the actual video \
+title when one is relevant. If the summary doesn't contain what the learner \
+asked about, say so in one brief, polite sentence and offer the closest \
+thing you *can* answer from the summary. Keep answers short, specific, and \
+grounded."""
 
 _PROMPT_TEMPLATE = """Learner's question: {question}
 
+RUN SUMMARY
 {context_block}
 
-Answer in 2-4 sentences, grounded only in the record above.
+Answer the learner's question briefly and specifically, using only the \
+information in the summary above.
 """
 
 
-def _all_titles(trace: Trace) -> dict[str, str]:
-    """video_id -> title over every candidate this run ever saw, discovered
-    or not -- the full universe fuzzy title matching searches against."""
-    return {c["video_id"]: c["title"] for c in trace.data.get("candidates", [])}
+def _rounded_minutes(minutes: float) -> int:
+    """Round a duration to a whole minute, half-up (17.6 -> 18, 2.5 -> 3)."""
+    return int(float(minutes) + 0.5)
 
 
-def resolve_video_id(trace: Trace, question: str) -> str | None:
-    """Deterministic only (HLD §5.1): exact video_id/URL match first, then
-    the closest fuzzy title match if it clears _MATCH_THRESHOLD. Never asks
-    an LLM to guess which video a vague question refers to."""
-    titles = _all_titles(trace)
-    for match in _VIDEO_ID_RE.finditer(question):
-        if match.group(1) in titles:
-            return match.group(1)
+def _build_summary(trace: Trace) -> str:
+    """Assemble the whole-run, learner-facing digest the phrasing model is
+    grounded in. Pulls from `trace.data` and drops anything internal: no
+    transcripts, evidence snippets, accuracy flags, numeric utility/confidence,
+    or the pipeline's `warnings` (which spell out transcript availability)."""
+    data = trace.data
+    inp = data.get("input") or {}
+    uc = inp.get("user_context") or {}
+    out = data.get("output") or {}
+    scope = data.get("scope_check") or {}
 
-    q_words = _significant_words(question)
-    best_id, best_overlap = None, 0.0
-    for video_id, title in titles.items():
-        title_words = _significant_words(title)
-        # A title with <2 distinctive words can't be matched reliably --
-        # any question sharing just one common-ish word would "match".
-        if len(title_words) < 2:
-            continue
-        overlap = len(title_words & q_words) / len(title_words)
-        if overlap > best_overlap:
-            best_id, best_overlap = video_id, overlap
-    return best_id if best_overlap >= _MATCH_THRESHOLD else None
+    lines: list[str] = []
+
+    # -- goal & learner (always -- it frames every other answer) ------------
+    goal = str(inp.get("goal") or "").strip() or "(no goal recorded)"
+    lines.append("Learner's goal: " + goal)
+    budget = inp.get("time_budget_minutes")
+    if budget is not None:
+        lines.append(f"Time budget: {budget} minutes")
+    if (uc.get("background") or "").strip():
+        lines.append("Background: " + str(uc["background"]).strip())
+    known = uc.get("known") or []
+    if known:
+        lines.append("Already knows: " + ", ".join(known))
+    unknown = uc.get("unknown") or []
+    if unknown:
+        lines.append("Wants to learn: " + ", ".join(unknown))
+    if (uc.get("constraints") or "").strip():
+        lines.append("Preferences: " + str(uc["constraints"]).strip())
+
+    # -- out-of-scope runs declined at the gate: answer "why no plan?" -------
+    if scope and scope.get("in_scope") is False:
+        lines.append("")
+        lines.append("THIS RUN WAS DECLINED AS OUT OF SCOPE")
+        if scope.get("reason"):
+            lines.append(str(scope["reason"]))
+        return "\n".join(lines)
+
+    # -- ordered plan --------------------------------------------------------
+    curriculum = out.get("curriculum") or []
+    if curriculum:
+        total = out.get("total_minutes")
+        total_part = f", about {int(float(total))} minutes" if total is not None else ""
+        lines.append("")
+        lines.append(f"YOUR PLAN (in order{total_part})")
+        for item in curriculum:
+            vid = item.get("video_id")
+            title = item.get("title") or "(untitled)"
+            dur = item.get("duration_minutes")
+            dur_part = f" (~{_rounded_minutes(dur)} min)" if dur is not None else ""
+            reason = item.get("reason") or ""
+            extra = f" -- {reason}" if reason else ""
+            id_part = f" [ID: {vid}]" if vid else ""
+            lines.append(f"{item.get('order', '?')}. {title}{id_part}{dur_part}{extra}")
+    else:
+        lines.append("")
+        lines.append("This run did not produce a plan.")
+
+    # -- the selection logic (static) ----------------------------------------
+    lines.append("")
+    lines.append("HOW YOUR PLAN WAS CHOSEN")
+    lines.append(_HOW_CHOSEN)
+
+    # -- every video this run looked at (the "whole pool") --------------------
+    scored = data.get("scored_candidates") or []
+    understanding_by_id: dict[str, dict] = {}
+    for sc in scored:
+        candidate = sc.get("candidate") or {}
+        vid = candidate.get("video_id")
+        if vid is not None:
+            understanding_by_id[vid] = sc.get("understanding") or {}
+
+    order_by_id = {item["video_id"]: item.get("order") for item in curriculum}
+    dropped_by_id = {d.get("video_id"): d for d in out.get("considered_and_dropped") or []}
+
+    candidates = data.get("candidates") or []
+    if candidates:
+        lines.append("")
+        lines.append(
+            "EVERY VIDEO THIS RUN LOOKED AT "
+            "(topics are listed only where this run established what the video teaches)"
+        )
+        for c in candidates:
+            vid = c.get("video_id")
+            title = c.get("title") or "(untitled)"
+            dur = c.get("duration_minutes")
+            channel = c.get("channel") or ""
+            where = f"~{_rounded_minutes(dur)} min" if dur is not None else ""
+            where = f"{where}, {channel}" if where and channel else (where or channel)
+            id_part = f" [ID: {vid}]" if vid else ""
+            header = f"- {title}{id_part}" + (f" ({where})" if where else "")
+
+            topics = understanding_by_id.get(vid, {}).get("covers_topics") or []
+            if vid in order_by_id:
+                outcome = f"in your plan (#{order_by_id[vid]})"
+            elif vid in dropped_by_id:
+                reason = (dropped_by_id[vid].get("reason_dropped") or "").strip()
+                outcome = f"not chosen: {reason}" if reason else "not chosen"
+            else:
+                outcome = "not chosen: no analysis recorded"
+
+            pieces = [header]
+            if topics:
+                pieces.append("covers: " + ", ".join(topics))
+            pieces.append(outcome)
+            lines.append(" — ".join(pieces))
+
+    # -- goal coverage ---------------------------------------------------------
+    coverage = out.get("goal_coverage") or {}
+    if coverage:
+        lines.append("")
+        lines.append("GOAL COVERAGE")
+        for topic, status in coverage.items():
+            lines.append(f"- {topic}: {status}")
+
+    # -- self-review ------------------------------------------------------------
+    review = out.get("review") or {}
+    iterations = review.get("iterations", 0) or 0
+    lines.append("")
+    lines.append("SELF-REVIEW")
+    if iterations:
+        approved = review.get("approved")
+        status = "approved" if approved else "not approved"
+        lines.append(f"the plan went through {iterations} review round(s) and was {status}")
+        for issue in review.get("unresolved_blocking_issues") or []:
+            if issue.get("issue"):
+                lines.append(f"- {issue['issue']}")
+    else:
+        lines.append("no separate self-review pass was run on this plan")
+
+    return "\n".join(lines)
 
 
-def _record_for(trace: Trace, video_id: str) -> dict:
-    """Assembles everything the trace recorded about one video_id -- score,
-    cluster-mates, and its selection/review outcome -- into one dict so the
-    phrasing call downstream sees the whole picture, never a partial one
-    that would nudge it toward filling gaps itself."""
-    candidate = next(
-        (c for c in trace.data.get("candidates", []) if c["video_id"] == video_id), None
-    )
-    scored = next(
-        (s for s in trace.data.get("scored_candidates", []) if s["candidate"]["video_id"] == video_id),
-        None,
-    )
-    cluster_id = trace.data.get("dedup_clusters", {}).get(video_id)
-    cluster_mates = [
-        vid
-        for vid, cid in trace.data.get("dedup_clusters", {}).items()
-        if cid == cluster_id and vid != video_id
-    ] if cluster_id is not None else []
-
-    output = trace.data.get("output") or {}
-    in_curriculum = next(
-        (item for item in output.get("curriculum", []) if item["video_id"] == video_id), None
-    )
-    considered_and_dropped = next(
-        (item for item in output.get("considered_and_dropped", []) if item["video_id"] == video_id),
-        None,
-    )
-    excluded_by_review = any(
-        video_id in step.get("excluded_by_review", [])
-        for step in trace.data.get("selection_steps", [])
-    )
-    review_issues = [
-        issue
-        for iteration in trace.data.get("review_iterations", [])
-        for issue in iteration.get("verdict", {}).get("issues", [])
-        if issue.get("target") == video_id
-    ]
-
-    return {
-        "video_id": video_id,
-        "title": candidate["title"] if candidate else None,
-        "understanding": scored["understanding"] if scored else None,
-        "utility": scored["utility"] if scored else None,
-        "cluster_id": cluster_id,
-        "cluster_mates": cluster_mates,
-        "made_final_curriculum": in_curriculum,
-        "considered_and_dropped_as": considered_and_dropped,
-        "excluded_by_review": excluded_by_review,
-        "review_issues_naming_it": review_issues,
-    }
+def _prompt_for(trace: Trace, question: str) -> str:
+    """Wrap the learner's question with the whole-run summary. Unlike the
+    earlier single-video record, this hands the model the full pool so it can
+    answer "which video covers X", "why is Y in my plan", or "what was the
+    selection logic" from one grounded digest."""
+    return _PROMPT_TEMPLATE.format(question=question, context_block=_build_summary(trace))
 
 
 def answer_question(trace: Trace, question: str) -> str:
-    """The one entrypoint the CLI bonus-ask path and ui/app.py's chat both
-    call. Returns plain text; logs the phrasing call into `trace` like any
-    other LLM call site (agent/trace.py's cost/latency bookkeeping)."""
-    video_id = resolve_video_id(trace, question)
-    if video_id is None:
-        context_block = (
-            "No video matching this question was ever discovered by this "
-            "run's search -- checked against every candidate this run saw, "
-            "whether it was ultimately selected, dropped, or excluded."
-        )
-    else:
-        context_block = f"Record for video_id {video_id}:\n{_record_for(trace, video_id)}"
-
-    prompt = _PROMPT_TEMPLATE.format(question=question, context_block=context_block)
+    """Non-streamed entrypoint: one schema-validated call returning the full
+    answer string. ui/app.py now uses answer_question_stream for the typewriter
+    effect; this stays as the plain-return API (forced tool call, so the answer
+    is a guaranteed single string with no preamble)."""
     result = call_structured(
-        prompt,
+        _prompt_for(trace, question),
         FollowupAnswer,
         tier="strong",
         system=_SYSTEM,
@@ -165,3 +221,18 @@ def answer_question(trace: Trace, question: str) -> str:
         trace_label="followup",
     )
     return result.answer
+
+
+def answer_question_stream(trace: Trace, question: str) -> Iterator[str]:
+    """Streamed chat entrypoint (ui/app.py): builds the same whole-run summary
+    as answer_question, then yields the answer token-by-token from a plain-text
+    completion so the UI can paint it as it arrives. Same `_SYSTEM` grounding
+    prompt; logs the call into `trace` on completion."""
+    yield from stream_text(
+        _prompt_for(trace, question),
+        system=_SYSTEM,
+        tier="strong",
+        max_tokens=1024,
+        trace=trace,
+        trace_label="followup",
+    )

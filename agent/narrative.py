@@ -6,7 +6,14 @@ arithmetic it's given.
 from __future__ import annotations
 
 from agent.llm_client import call_structured
-from agent.schemas import NarrativeDraft, PersonaInput, ReviewIssue, ScoredCandidate
+from agent.schemas import (
+    NarrativeDraft,
+    NarrativeDroppedItem,
+    NarrativeItem,
+    PersonaInput,
+    ReviewIssue,
+    ScoredCandidate,
+)
 
 # Bumped from the original 4096 -- seen live: a review-loop re-narration
 # (more items + a feedback block appended, HLD §3.9) is a meaningfully
@@ -93,15 +100,55 @@ def generate_narrative(
     notable_dropped: list[tuple[ScoredCandidate, str]],
     *,
     feedback: list[ReviewIssue] | None = None,
+    previous_items: list[NarrativeItem] | None = None,
+    previous_dropped: list[NarrativeDroppedItem] | None = None,
     trace=None,
 ) -> NarrativeDraft:
+    """`previous_items`/`previous_dropped` are the prior pass's draft
+    (agent/graph.py passes `state["narrative_draft"]` on a review-triggered
+    reselect, HLD §3.9). A video_id unchanged from that pass AND not itself
+    named by `feedback` (and no feedback issue targets "overall") reuses its
+    prior reason verbatim instead of re-asking the LLM -- "the judge's
+    narrative regeneration for everyone is not necessary" when a selection-
+    only fix just excludes a flagged pick with no replacement, the reusable
+    set is everything, and zero LLM calls happen here."""
     if not selected:
         return NarrativeDraft(items=[], dropped=[])
 
-    selected_block = "\n---\n".join(_format_selected(sc) for sc in selected)
+    feedback_targets = {issue.target for issue in feedback} if feedback else set()
+    overall_flagged = "overall" in feedback_targets
+    previous_items_map = {item.video_id: item for item in previous_items or []}
+    previous_dropped_map = {item.video_id: item for item in previous_dropped or []}
+
+    def _reusable(video_id: str, prior_map: dict) -> bool:
+        return video_id in prior_map and video_id not in feedback_targets and not overall_flagged
+
+    reused_items = [
+        previous_items_map[sc.candidate.video_id]
+        for sc in selected
+        if _reusable(sc.candidate.video_id, previous_items_map)
+    ]
+    reused_dropped = [
+        previous_dropped_map[sc.candidate.video_id]
+        for sc, _ in notable_dropped
+        if _reusable(sc.candidate.video_id, previous_dropped_map)
+    ]
+    gen_selected = [
+        sc for sc in selected if not _reusable(sc.candidate.video_id, previous_items_map)
+    ]
+    gen_dropped = [
+        (sc, sup)
+        for sc, sup in notable_dropped
+        if not _reusable(sc.candidate.video_id, previous_dropped_map)
+    ]
+
+    if not gen_selected and not gen_dropped and (previous_items_map or previous_dropped_map):
+        return NarrativeDraft(items=reused_items, dropped=reused_dropped)
+
+    selected_block = "\n---\n".join(_format_selected(sc) for sc in gen_selected)
     dropped_block = (
-        "\n---\n".join(_format_dropped(sc, sup) for sc, sup in notable_dropped)
-        if notable_dropped
+        "\n---\n".join(_format_dropped(sc, sup) for sc, sup in gen_dropped)
+        if gen_dropped
         else "(none)"
     )
     feedback_section = ""
@@ -133,16 +180,20 @@ def generate_narrative(
         # stages) have already run. Crashing the whole pipeline over one
         # phrasing call would throw all of that away; render.py already
         # falls back to a deterministic reason per item when narrative
-        # has none for it (§3.10), so an empty draft here degrades
-        # gracefully instead.
-        return NarrativeDraft(items=[], dropped=[])
+        # has none for it (§3.10) -- so falling back to just the reused
+        # subset (rather than discarding it too) still degrades gracefully.
+        return NarrativeDraft(items=reused_items, dropped=reused_dropped)
 
     # Boundary validation on a real LLM completion (CLAUDE.md: validate at
     # real system edges) -- restrict to exactly the video_ids we asked
-    # about, so a model that drifts (invents/omits an id) can't leak a
-    # mismatched reason into render.py.
-    selected_ids = {sc.candidate.video_id for sc in selected}
-    dropped_ids = {sc.candidate.video_id for sc, _ in notable_dropped}
-    draft.items = [item for item in draft.items if item.video_id in selected_ids]
-    draft.dropped = [item for item in draft.dropped if item.video_id in dropped_ids]
+    # about this call, so a model that drifts (invents/omits an id) can't
+    # leak a mismatched reason into render.py.
+    gen_selected_ids = {sc.candidate.video_id for sc in gen_selected}
+    gen_dropped_ids = {sc.candidate.video_id for sc, _ in gen_dropped}
+    draft.items = reused_items + [
+        item for item in draft.items if item.video_id in gen_selected_ids
+    ]
+    draft.dropped = reused_dropped + [
+        item for item in draft.dropped if item.video_id in gen_dropped_ids
+    ]
     return draft

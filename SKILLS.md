@@ -393,3 +393,232 @@ originally.
 **Where:** `agent/config.py` (`FETCH_MAX_WORKERS`), `agent/graph.py`
 (`_fetch`, now a bounded `ThreadPoolExecutor` keyed by original index so
 downstream candidate order is unchanged regardless of completion order).
+
+---
+
+### 14. Swap the local dedup embedding model for a hosted one over OpenRouter
+
+**Trigger (explicit request):** "since sentence-transformer is the only
+open source model and taking a lot of time, replace it with any
+proprietary embedding model from openrouter" -- made while `docker
+compose build cli` was still running past 20 minutes, all of it spent
+compiling/installing `sentence-transformers`'s torch dependency. Verified
+via `docker buildx du`/`docker images` that the build was genuinely still
+making progress, not hung -- the local embedding model was just a heavy
+runtime for what §3.5 needed (embed a few dozen short summary strings per
+run, cluster with union-find).
+
+**What was verified before committing to the swap:** OpenRouter's
+`/embeddings` endpoint is OpenAI-Chat-Completions-compatible, same as the
+chat endpoint already in use -- a live test call against
+`openai/text-embedding-3-small` returned real 1536-dim vectors at
+negligible cost (`Usage(prompt_tokens=5, total_tokens=5, cost=1e-07)`).
+This reuses the one `OPENROUTER_API_KEY` every chat call already requires;
+no second credential, no second client, no separate runtime dependency.
+`agent/llm_client.py` gained one new function, `call_embeddings()`,
+alongside the existing `call_structured()` -- same client, same trace
+logging pattern (`tier="embedding"`, an untyped string field at the trace
+layer, so no schema change was needed).
+
+**What did NOT change:** the union-find clustering logic and the
+cosine-similarity threshold *comparison* in `agent/dedup.py` are still
+plain deterministic code (CLAUDE.md principle #2) -- only the embedding
+*vector generation* moved from a local model to a hosted API call. This
+is a runtime/dependency change, not an architecture change to how
+dedup decides what's a duplicate.
+
+**Recalibration was necessary, not optional:** cosine-similarity
+distributions are model-space-specific. The old `SIMILARITY_THRESHOLD`
+(0.82) was tuned for `all-MiniLM-L6-v2` and had no reason to transfer to
+`text-embedding-3-small`'s embedding space. Recalibrated live against 36
+real (non-degenerate) `UnderstandingRecord`s from a saved
+`git_basics_high_duplication` trace -- filtering out the ~44 records
+whose `covers_topics` was empty due to the persistent caption-CDN 429
+(README.md), since those produce near-identical, spuriously-inflated
+"duplicate" summary strings that would calibrate against noise, not
+content. Swept 0.80-0.88 and inspected the actual resulting clusters at
+each cut point, not just the similarity numbers:
+  - 0.80-0.82: union-find's transitive closure chains through weakly-
+    related intermediates into one 9-17-member megacluster mixing
+    merge-conflict videos with branching, DevOps-practices, and IDE-
+    tooling videos -- a chaining artifact, not real duplication.
+  - 0.86-0.88: genuine triples (e.g. three distinct "GitHub collaboration
+    setup" videos) start splitting into disconnected pairs, losing real
+    duplicates the lower thresholds correctly caught.
+  - 0.84: no chaining artifact, every remaining multi-member cluster is
+    topically tight. Set as the final value.
+
+**What could not be recalibrated the same way, and why that's disclosed
+rather than papered over:** `eval/run_eval.py`'s
+`_EMBEDDING_COVERAGE_THRESHOLD` (§6.1 method (b), topic-string-vs-pick-
+transcript similarity) needed different calibration data -- a short
+phrase against a full transcript, not two comparable-length summaries.
+Every attempt to gather that data hit the same persistent caption-CDN 429
+already documented in this project: every candidate in every saved trace
+under `outputs/` has an empty transcript. Left at a reasoned placeholder
+(0.30, down from the old 0.35 -- OpenAI's embedding space is known to run
+flatter for short-query-vs-passage similarity than sentence-transformers')
+with a comment saying plainly it's not live-verified and how to
+recalibrate it once transcripts are actually fetchable, per this
+project's "evaluate what's verifiable, say plainly what isn't" rule
+(CLAUDE.md principle #4) -- rather than inventing synthetic transcript
+text to force a number.
+
+**A real bug this swap surfaced, not just a config change:** the old
+local model silently embedded empty strings (a transcript-less pick)
+into some garbage-but-valid vector, silently producing low, meaningless
+similarity scores. OpenAI's hosted endpoint hard-rejects an empty string
+(`400: Input is empty`). `_embedding_topic_coverage` now filters out
+picks with no transcript before embedding, and reports
+`fraction_covered: None` rather than crashing or fabricating a number
+when no pick has one -- which, given the 429 above, is every scenario run
+in this environment right now.
+
+**Where:** `agent/config.py` (`MODEL_EMBEDDING`), `agent/llm_client.py`
+(`call_embeddings`), `agent/dedup.py` (`SIMILARITY_THRESHOLD = 0.84`,
+rewritten to call the hosted embedding via `embed()`),
+`eval/run_eval.py` (`_EMBEDDING_COVERAGE_THRESHOLD = 0.30`,
+`_embedding_topic_coverage`'s empty-transcript filter), `agent/graph.py`
+(`_dedup` passes `trace` through), `requirements.txt` (removed
+`sentence-transformers`, `openai>=1.50` now serves both chat and
+embeddings), `.env.example` (`MODEL_EMBEDDING`).
+
+### 15. Latency/cost round: transcript-source swap, tighter query fan-out, cheap-tier online judge + incremental narrative, Streamlit exact-match cache
+
+**Trigger (explicit request):** "use yt-dlp for searching and
+youtube-transcript-api for getting the transcript / for query planning
+get 4-5 different queries and then choose top 40 / for Judge narrative
+regeneration for everyone is not necessary and Skip the review loop's
+narrative rewrite entirely when the only blocking issues are
+selection-stage, also shift to a very lightweight model for the judge. /
+On streamlit side implement exact caching... later will incorporate the
+similarity caching." Four independent sub-changes.
+
+**Transcript source: `youtube-transcript-api` instead of the raw VTT
+fetch, `yt-dlp` still owns search/metadata.** A second, genuinely
+different attempt at dodging the caption-CDN 429 documented under entry
+14 and in README.md -- a dedicated library talking to YouTube's caption
+endpoint directly, not `yt-dlp`'s caption-URL indirection.
+**Live-verified result: still blocked, same root cause, different code
+path.** A direct call against two well-known, definitely-captioned video
+IDs (`dQw4w9WgXcQ`, `jNQXAC9IVRw`) both raised `IpBlocked` from the
+library itself -- YouTube is blocking the request origin at the IP
+level, which no client-library swap fixes. Re-confirmed a second time in
+this same round of work; the finding is stable, not a one-off. Disclosed
+plainly rather than claimed fixed: `agent/transcripts.py` is a strictly
+better code path (a maintained library instead of hand-rolled VTT
+parsing/retry logic) but does not resolve the underlying blocker in this
+environment. `NoTranscriptFound`/`TranscriptsDisabled`/`VideoUnavailable`
+plus a bare `Exception` fallback all degrade to
+`transcript_available=False` exactly as before.
+
+**Query planning: 4-5 queries, not 4-8; candidate cap 40, not 80.**
+`QueryPlan.queries` tightened to `min_length=4, max_length=5`;
+`agent/discovery.py::MAX_TOTAL_CANDIDATES` dropped from 80 to 40. Fewer,
+more targeted queries need less of a cap to protect against fan-out.
+**Live-verified twice** (`git_basics_high_duplication`,
+`docker_tiny_budget`): both real runs produced exactly 5 queries and
+capped at exactly 40 candidates.
+
+**Online judge moved to the cheap tier; offline eval judge untouched.**
+`agent/critique.py`'s `llm_judgment()`/`evaluate()` gained a `tier: Tier
+= "strong"` parameter threaded into `call_structured`, instead of a
+second judgment prompt (CLAUDE.md: `agent/critique.py` stays the single
+source of truth). `agent/review.py::run_review` -- the path every real
+user request goes through -- passes `tier="cheap"` explicitly.
+`eval/judge.py` keeps the untouched `"strong"` default, since CLAUDE.md
+calls the eval "graded most carefully." Which call site gets the
+lightweight model was a judgment call made per that stated priority, not
+asked about. **Live-verified**: every `critique`-labeled call in both
+verification traces used `anthropic/claude-haiku-4.5`; every `narrative`
+call stayed on `anthropic/claude-sonnet-5`.
+
+**"Skip the review loop's narrative rewrite entirely" -- read literally
+this breaks a newly-swapped-in pick's contract (it would ship with no
+`reason` at all), so this is built as incremental narrative
+regeneration, not a literal always-skip.** `agent/narrative.py::
+generate_narrative` now takes `previous_items`/`previous_dropped` (the
+prior pass's draft, threaded through `agent/graph.py`'s `_narr` node
+from `state["narrative_draft"]`, which LangGraph already carries across
+loop iterations). A video_id is reused verbatim -- no LLM involvement --
+when it's present in the prior draft, not itself named by a
+narrative-stage blocking issue, and no issue targets `"overall"`. Only
+the genuinely-new/feedback-targeted subset is sent to the LLM; if that
+subset is empty on both sides, the call is skipped entirely (0 LLM
+calls) -- the literal "skip entirely" case, which holds whenever a
+selection-only fix purely *excludes* a flagged pick with no replacement.
+When a fix *swaps in* a replacement pick (the common case in adversarial
+test scenarios, where exclusion frees budget that selection then spends
+on a different candidate), that one new pick still gets narrated -- the
+one case "entirely" can't be honored without leaving a pick unexplained.
+**Live-verified** on `docker_tiny_budget` (3 review iterations, each
+excluding a different flagged video and selection filling the freed
+budget with a new pick): iteration 0's narrative call generated
+everything (4085 input / 1847 output tokens); iterations 1 and 2 dropped
+to 1525/166 and 1360/129 tokens respectively -- both calls happened
+(a new pick appeared each round in this adversarial scenario, so the
+zero-call branch didn't fire here), but each generated for exactly the
+one new pick and reused everything else, matching the design.
+
+**Streamlit exact-match run cache, deliberately not similarity/fuzzy
+(named as a later, separate request by the user).** New
+`agent/run_cache.py`: same sqlite file as `agent/cache.py`'s
+understanding cache (`config.CACHE_PATH`), a second table. Key is a
+sha256 of the *full* `PersonaInput` payload (including free-text `goal`
+-- unlike the understanding-cache key, which deliberately excludes
+`goal`) plus `enable_reviewer`, since both determine the pipeline's
+output. `ui/app.py` checks the cache before calling `run_from_payload`
+in both the "New persona" and "Existing test_set scenario" branches; a
+hit re-renders the saved trace with zero pipeline calls, a miss runs
+normally and populates the cache after. UI-only orchestration (CLAUDE.md:
+"`ui/app.py` is a thin layer") -- `run.py`'s CLI path is untouched, per
+the user's own scoping to "on streamlit side."
+
+**Docker rebuild after adding `youtube-transcript-api`: initially blocked
+in-shell, then re-verified once the binary was located -- and a second,
+real bug caught right after, from only rebuilding half of it.** `docker`
+was not on `PATH` in the shell this session ran in (`which docker`
+failed); turned out the daemon (Docker Desktop) was installed and
+running the whole time, just with its CLI at
+`/Applications/Docker.app/Contents/Resources/bin/docker`, not symlinked
+onto `PATH`. Re-ran with that path prepended: `docker compose build cli`
+succeeded (~3m42s, `youtube-transcript-api` and `yt-dlp` both installed
+cleanly in the image), `docker compose run --rm cli --input
+test_set/02_docker_tiny_budget.json` ran the full pipeline for real
+inside the container (3 review iterations, real curriculum output --
+note the `entrypoint: ["python", "run.py"]` in `docker-compose.yml`
+means the command is just `--input ...`, not `python run.py --input
+...`).
+
+**Real bug caught by the user, not by me:** I had only run `docker
+compose build cli`, then separately brought up `ui` and health-checked
+it -- but `docker-compose.yml`'s `cli` and `ui` services each have their
+own `build: .` with no shared `image:` tag, so Compose keeps two
+*independent* images from the same Dockerfile. Rebuilding `cli` never
+touched `ui`'s image, so `docker compose up ui` was still serving the
+pre-this-round code (80-candidate cap, 4-8 queries) even after the "full"
+verification above -- a health-check 200 says the server started, not
+that it's running current code. The user caught this by actually using
+the app and noticing 80 candidates in the search log. Fixed by rebuilding
+`ui` explicitly (`docker compose build ui`), then verifying inside the
+*running* container this time, not just via HTTP health check:
+`docker compose exec ui python -c "from agent import discovery;
+print(discovery.MAX_TOTAL_CANDIDATES)"` → `40`, plus a full
+`run_from_payload(...)` executed inside the container via `docker compose
+exec ui python -c "..."` confirmed 5 queries / 40 candidates for real.
+**Lesson: verifying a multi-service Compose file after a code change
+means rebuilding (and probing the actual running code of) every service
+whose image derives from the changed files, not just the one you happened
+to `build`/`run` first — an HTTP 200 from a health endpoint is not
+evidence the container is running the code you think it is.**
+
+**Where:** `requirements.txt` (`youtube-transcript-api`),
+`agent/transcripts.py`, `agent/query_planning.py`
+(`QueryPlan.queries`), `agent/discovery.py`
+(`MAX_TOTAL_CANDIDATES = 40`), `agent/critique.py` (`tier` param on
+`llm_judgment`/`evaluate`), `agent/review.py` (`tier="cheap"`),
+`agent/narrative.py` (`generate_narrative`'s reuse/splice logic),
+`agent/graph.py` (`_narr` threading `previous_items`/`previous_dropped`),
+`agent/run_cache.py` (new), `ui/app.py` (`_run_with_cache`),
+`tests/test_narrative.py` (new), `tests/test_run_cache.py` (new),
+`HLD.md` §8/§9, `APPROACH.md` scope decisions.

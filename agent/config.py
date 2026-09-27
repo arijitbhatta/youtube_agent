@@ -19,6 +19,17 @@ load_dotenv(REPO_ROOT / ".env")
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 MODEL_CHEAP = os.environ.get("MODEL_CHEAP", "anthropic/claude-haiku-4.5")
 MODEL_STRONG = os.environ.get("MODEL_STRONG", "anthropic/claude-sonnet-5")
+# Dedup clustering + the eval harness's embedding cross-check (agent/dedup.py)
+# -- a hosted embedding model via the same OpenRouter client/key, not a
+# local model. See SKILLS.md #14 for why (a local sentence-transformers
+# model made the Docker build take >20 minutes on first `docker compose
+# build`, entirely from installing torch).
+MODEL_EMBEDDING = os.environ.get("MODEL_EMBEDDING", "openai/text-embedding-3-small")
+# Google Books API key (agent/recommendations.py, the UI-only "while you
+# waited" fallback). Optional: without it the Books API works but on a tiny
+# anonymous per-IP daily quota that's already exhausted in this environment
+# (429 "Queries per day"); a free per-project key raises that ceiling.
+GOOGLE_BOOKS_API_KEY = os.environ.get("GOOGLE_BOOKS_API_KEY", "")
 CACHE_PATH = REPO_ROOT / os.environ.get("CACHE_PATH", "outputs/cache.sqlite3")
 OUTPUTS_DIR = REPO_ROOT / "outputs"
 

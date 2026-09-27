@@ -155,3 +155,34 @@ def render_markdown(output: CurriculumOutput) -> str:
             lines.append(f"  - [{issue.target}] {issue.issue}")
 
     return "\n".join(lines)
+
+
+def render_markdown_lean(output: CurriculumOutput) -> str:
+    """Learner-facing Markdown (HLD.md §5.2) -- what ui/app.py shows, not the
+    full `render_markdown` above (which the CLI and eval keep). Omits the
+    internal/eval surfaces -- warnings, confidence, grounded, evidence,
+    goal coverage, the reviewer, and the ranked considered-and-dropped list
+    (CLAUDE.md principle #4: transparency lives in the trace/JSON/CLI, not in
+    what a learner is shown). Title is rendered as plain text rather than
+    inside a markdown link so an upstream title can't break the link syntax.
+    """
+    n = len(output.curriculum)
+    noun = "video" if n == 1 else "videos"
+    lines = [
+        "# Your learning plan",
+        "",
+        f"**{n} {noun} · {output.total_minutes:.0f} of {output.budget_minutes} min**",
+        "",
+    ]
+    for item in output.curriculum:
+        lines.append(f"**{item.order}. {item.title}** · {item.duration_minutes:.0f} min")
+        lines.append(f"[Watch on YouTube]({item.url})")
+        lines.append(f"{item.reason}")
+        lines.append("")
+    if output.total_minutes > output.budget_minutes:
+        lines.append(
+            "Note: this plan runs a little over your budget — the last item or two "
+            "may be skippable if you're short on time."
+        )
+        lines.append("")
+    return "\n".join(lines)

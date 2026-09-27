@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from typing import Callable
 
 from agent.config import ENABLE_REVIEWER_DEFAULT, OUTPUTS_DIR, api_key_present
 from agent.graph import run_pipeline
@@ -16,9 +17,18 @@ from agent.render import render_markdown
 from agent.schemas import CurriculumOutput, OutOfScopeOutput, PersonaInput
 
 
-def run_from_payload(input_payload: PersonaInput, *, enable_reviewer: bool = ENABLE_REVIEWER_DEFAULT):
-    """Returns (output, trace_path). Shared by the CLI below and ui/app.py."""
-    output, trace = run_pipeline(input_payload, enable_reviewer=enable_reviewer)
+def run_from_payload(
+    input_payload: PersonaInput,
+    *,
+    enable_reviewer: bool = ENABLE_REVIEWER_DEFAULT,
+    progress_cb: Callable[[str, str], None] | None = None,
+):
+    """Returns (output, trace_path). Shared by the CLI below and ui/app.py.
+
+    `progress_cb`, when given, is invoked with `(stage, detail)` at each
+    pipeline node boundary -- ui/app.py uses it for the live progress panel;
+    the CLI leaves it `None`."""
+    output, trace = run_pipeline(input_payload, enable_reviewer=enable_reviewer, progress_cb=progress_cb)
     trace_path = trace.save(OUTPUTS_DIR)
     return output, trace_path
 

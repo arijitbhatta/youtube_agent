@@ -30,8 +30,14 @@ def run_review(
     *,
     trace=None,
 ) -> ReviewVerdict:
+    # tier="cheap" here (not critique.evaluate's own "strong" default): this
+    # is the path that runs on every real user request, so it gets the
+    # lightweight model. eval/judge.py leaves the default alone -- offline
+    # grading fidelity is untouched (CLAUDE.md: "the eval is graded most
+    # carefully"). The deterministic anchoring in critique.deterministic_issues
+    # is unaffected either way -- it's not an LLM call.
     return critique.evaluate(
-        input_payload, draft_output, picks_in_order, candidate_pool, trace=trace
+        input_payload, draft_output, picks_in_order, candidate_pool, tier="cheap", trace=trace
     )
 
 

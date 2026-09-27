@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import sys
-from typing import TypedDict
+from typing import Callable, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -70,13 +70,26 @@ class PipelineState(TypedDict, total=False):
     output: CurriculumOutput | OutOfScopeOutput
 
 
+# Optional per-stage progress hook, set by run_pipeline for the duration of a
+# run and cleared in its `finally`. (stage, detail) is emitted at every node
+# boundary and mid-fetch (see _log) so a caller (ui/app.py's live panel) can
+# paint "what is the pipeline doing right now". The CLI never sets it, so its
+# stderr-only behavior is unchanged. Single-running assumption: this global is
+# written/read only inside the one pipeline thread, never racing itself.
+ProgressFn = Callable[[str, str], None]
+_progress_cb: ProgressFn | None = None
+
+
 def _log(stage: str, detail: str = "") -> None:
     # Stages here are sequential network/LLM-bound calls that can each take
     # a while (yt-dlp metadata fetches especially) -- a completely silent
     # multi-minute run is indistinguishable from a hang, so each node
     # announces itself on stderr rather than only writing to the trace,
-    # which isn't readable until the whole run finishes.
+    # which isn't readable until the whole run finishes. The same signal is
+    # also forwarded to the optional progress callback for the UI.
     print(f"[graph] {stage}{': ' + detail if detail else ''}", file=sys.stderr, flush=True)
+    if _progress_cb is not None:
+        _progress_cb(stage, detail)
 
 
 def _gate(state: PipelineState) -> dict:
@@ -150,7 +163,7 @@ def _und(state: PipelineState) -> dict:
 
 def _dedup(state: PipelineState) -> dict:
     _log("dedup")
-    cluster_ids = dedup.cluster_candidates(state["understanding"])
+    cluster_ids = dedup.cluster_candidates(state["understanding"], trace=state["trace"])
     state["trace"].set_dedup_clusters(cluster_ids)
     return {"cluster_ids": cluster_ids}
 
@@ -202,8 +215,15 @@ def _narr(state: PipelineState) -> dict:
     _log("narrative", f"{len(state['selected'])} selected")
     notable = narrative.notable_dropped_for(state["selected"], state["dropped"])
     feedback = review.narrative_feedback(state.get("review_verdict"))
+    previous = state.get("narrative_draft")
     draft = narrative.generate_narrative(
-        state["input"], state["selected"], notable, feedback=feedback, trace=state["trace"]
+        state["input"],
+        state["selected"],
+        notable,
+        feedback=feedback,
+        previous_items=previous.items if previous else None,
+        previous_dropped=previous.dropped if previous else None,
+        trace=state["trace"],
     )
     return {"narrative_draft": draft}
 
@@ -314,8 +334,12 @@ def _get_compiled():
 
 
 def run_pipeline(
-    input_payload: PersonaInput, *, enable_reviewer: bool = ENABLE_REVIEWER_DEFAULT
+    input_payload: PersonaInput,
+    *,
+    enable_reviewer: bool = ENABLE_REVIEWER_DEFAULT,
+    progress_cb: ProgressFn | None = None,
 ) -> tuple[CurriculumOutput | OutOfScopeOutput, Trace]:
+    global _progress_cb
     trace = Trace(persona_id=input_payload.persona_id)
     trace.set_input(input_payload.model_dump(), enable_reviewer=enable_reviewer)
     initial_state: PipelineState = {
@@ -328,5 +352,9 @@ def run_pipeline(
     # ~20 node visits total) -- the actual cap enforced is
     # review.MAX_REVIEW_ITERATIONS via the explicit counter above, not
     # this framework default (CLAUDE.md principle #5).
-    final_state = _get_compiled().invoke(initial_state)
+    _progress_cb = progress_cb
+    try:
+        final_state = _get_compiled().invoke(initial_state)
+    finally:
+        _progress_cb = None
     return final_state["output"], trace

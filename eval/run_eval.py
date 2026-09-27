@@ -40,7 +40,18 @@ _SURFACE_INTRO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SURFACE_INTRO_MAX_MINUTES = 5.0
-_EMBEDDING_COVERAGE_THRESHOLD = 0.35
+# NOT live-recalibrated for text-embedding-3-small (unlike dedup.py's
+# SIMILARITY_THRESHOLD, which was): this compares a short topic phrase
+# against a full transcript, not two similar-length summaries, and every
+# attempt to gather real topic-vs-transcript similarity data hit the same
+# persistent caption-CDN 429 already documented in README.md -- every
+# candidate across every saved trace in outputs/ has an empty transcript.
+# 0.30 is a reasoned placeholder (OpenAI's embedding space is known to run
+# lower/flatter than sentence-transformers' for short-query-vs-passage
+# comparisons; the old 0.35 was tuned for MiniLM and doesn't transfer
+# either). Recalibrate the same way SIMILARITY_THRESHOLD was -- against
+# real topic-vs-transcript pairs -- once transcripts are actually fetchable.
+_EMBEDDING_COVERAGE_THRESHOLD = 0.30
 
 
 def _load_scenarios(names: list[str] | None) -> list[tuple[str, PersonaInput]]:
@@ -64,17 +75,29 @@ def _transcripts_by_id(trace: Trace) -> dict[str, str]:
     return {c["video_id"]: c["transcript"] for c in trace.data.get("candidates", []) if c.get("transcript")}
 
 
-def _embedding_topic_coverage(unknown_topics: list[str], picks: list[ScoredCandidate]) -> dict:
+def _embedding_topic_coverage(
+    unknown_topics: list[str], picks: list[ScoredCandidate], *, trace=None
+) -> dict:
     """§6.1 method (b): embedding similarity between the topic string and a
     pick's transcript, computed independently of the LLM's own
     `matches_unknown` self-report (method (a), eval/metrics.py). Reports
     disagreement between the two rather than picking one as correct --
-    both are proxies (HLD §6.4)."""
+    both are proxies (HLD §6.4).
+
+    Only picks with a real fetched transcript are usable here -- the
+    hosted embeddings API (unlike the old local model) hard-rejects an
+    empty string (400 "Input is empty") rather than silently returning a
+    junk vector, so an empty transcript must be filtered out before the
+    call, not passed through. When the persistent caption-CDN 429
+    documented elsewhere in this project (README.md) has blocked every
+    transcript fetch, no pick has real text and this returns
+    fraction_covered=None rather than a fabricated number."""
+    picks = [sc for sc in picks if sc.candidate.transcript]
     if not unknown_topics or not picks:
         return {"fraction_covered": None, "disagreements": []}
-    transcripts = [sc.candidate.transcript or "" for sc in picks]
-    topic_emb = dedup.embed(unknown_topics)
-    pick_emb = dedup.embed(transcripts)
+    transcripts = [sc.candidate.transcript for sc in picks]
+    topic_emb = dedup.embed(unknown_topics, trace=trace, trace_label="eval_embedding_coverage")
+    pick_emb = dedup.embed(transcripts, trace=trace, trace_label="eval_embedding_coverage")
     covered_flags = []
     disagreements = []
     for i, topic in enumerate(unknown_topics):
@@ -136,6 +159,13 @@ def run_scenario(
     picks = _picks_in_order(output, pool)
     transcripts = _transcripts_by_id(trace)
 
+    # A separate, unsaved trace just to capture eval-time-only LLM/embedding
+    # calls' own cost (the judge below, and the embedding cross-check just
+    # above it) -- these must never be merged back into trace_path's saved
+    # file (that file is the record of what running the agent once, for
+    # real, actually cost).
+    judge_trace = Trace(persona_id=name)
+
     report: dict = {
         "scenario": name,
         "enable_reviewer": enable_reviewer,
@@ -147,7 +177,7 @@ def run_scenario(
         "curriculum_shape_sanity": metrics.curriculum_shape_sanity(output, len(pool)),
         "unknown_topic_coverage_llm": metrics.unknown_topic_coverage(output),
         "unknown_topic_coverage_embedding": _embedding_topic_coverage(
-            input_payload.user_context.unknown, picks
+            input_payload.user_context.unknown, picks, trace=judge_trace
         ),
         "known_topic_leakage": metrics.known_topic_leakage(picks),
         "constraint_compliance": metrics.constraint_compliance(picks),
@@ -159,12 +189,6 @@ def run_scenario(
         "review_summary": output.review.model_dump(),
     }
 
-    # A separate, unsaved trace just to capture the judge calls' own
-    # cost -- these are eval-time calls, not part of what the live pipeline
-    # run itself cost, so they must never be merged back into trace_path's
-    # saved file (that file is the record of what running the agent once,
-    # for real, actually cost).
-    judge_trace = Trace(persona_id=name)
     judge_verdicts = judge.judge_output(
         input_payload, output, picks, pool, runs=judge_runs, trace=judge_trace
     )

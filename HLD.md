@@ -267,7 +267,7 @@ once.
 
 ### 3.1 Query planning
 
-One Claude call: given `goal` + `user_context`, produce 4–8 targeted search
+One Claude call: given `goal` + `user_context`, produce 4–5 targeted search
 queries — one per `unknown` item where that makes sense, plus one or two
 phrased around the goal itself (e.g. for the reference persona: `"Vite React
 setup tutorial"`, `"React hooks tutorial project"`, `"build habit tracker
@@ -279,24 +279,27 @@ capstone-project videos.
 
 `yt-dlp` search (`ytsearch40:<query>`) per planned query, flat-extracted
 (cheap — no per-video download). Merge and dedupe by `video_id` across
-queries. Typical fan-in: 6 queries × ~40 results, collapsing to maybe
-150–250 unique candidates before any filtering.
+queries, round-robin by rank across queries and hard-capped at
+`MAX_TOTAL_CANDIDATES = 40` (`agent/discovery.py`) so the expensive stages
+below always see a bounded, predictable volume regardless of how many raw
+results a fan-out of 4–5 queries × 40 results/query produces.
 
 Cheap pre-filters, no LLM involved: drop videos over the full budget on
 their own, drop live streams/shorts under ~90 seconds, drop non-target-
 language if a language constraint is given, drop obvious non-matches by a
 lightweight keyword check. This is what keeps the expensive stages (3.4
 onward) from having to look at hundreds of clearly-irrelevant candidates.
-Target: filter down to ~40–80 before understanding.
+Target: filter down to ~40 before understanding.
 
 ### 3.3 Metadata + transcript fetch
 
-`yt-dlp` again, per surviving candidate: full metadata (real duration,
-description, upload date) and auto-captions if available (`transcript_available`
-flag either way). Captions are cleaned (strip timestamps/formatting) and, if
-long, down-sampled to an even spread across the video rather than truncated
-from the start — a 90-minute tutorial's last third matters as much as its
-first.
+`yt-dlp` again, per surviving candidate, for real metadata (duration,
+description, upload date) — download-free, as below. The transcript itself
+comes from `youtube-transcript-api` (SKILLS.md #15) rather than yt-dlp's own
+caption-URL indirection; `transcript_available` is set either way. If long,
+the transcript is down-sampled to an even spread across the video rather
+than truncated from the start — a 90-minute tutorial's last third matters
+as much as its first.
 
 **This entire stage is download-free, as a hard constraint, not an
 implementation detail.** Discovery (§3.2) and this step call `yt-dlp`
@@ -325,13 +328,23 @@ separate signal that needs its own pass.
 
 ### 3.5 Dedup clustering
 
-Embed each candidate's `covers_topics` + style/depth summary with a small
-local sentence-embedding model (e.g. `all-MiniLM-L6-v2` — free, offline,
-fast, no extra API calls or cost). Cluster by
-cosine-similarity threshold (simple union-find over pairs above the
-threshold — no need for a clustering library at this candidate count).
-Videos in the same cluster are treated as substitutes for each other in
-selection, not as independent coverage.
+Embed each candidate's `covers_topics` + style/depth summary with a
+hosted proprietary embedding model over OpenRouter (`openai/
+text-embedding-3-small`, same client/key as every chat call — see
+`agent/llm_client.call_embeddings`). Cluster by cosine-similarity
+threshold (simple union-find over pairs above the threshold — no need
+for a clustering library at this candidate count). Videos in the same
+cluster are treated as substitutes for each other in selection, not as
+independent coverage.
+
+Originally a small local sentence-embedding model (`all-MiniLM-L6-v2` —
+free, offline, no extra API calls) — swapped after a local Docker build
+spent >20 minutes on torch alone for what amounts to embedding a few
+dozen short strings per run. See SKILLS.md #14 for the full reasoning,
+the live threshold recalibration (0.82 → 0.84, a different model's
+embedding space), and the one real bug the swap surfaced (the hosted
+endpoint hard-rejects empty-string input where the local model silently
+tolerated it).
 
 ### 3.6 Deterministic scoring
 
@@ -841,25 +854,38 @@ and wall-clock latency on every call; aggregated per run into the trace.
 **Call budget per run,** by design: 1 scope-check call (§0, on every
 request, cheap tier) that either short-circuits everything below at
 negligible cost, or lets the rest of the run proceed — followed by 1
-query-planning call + ~8–16
-understanding calls (batched ~5 candidates each, over ~40–80 filtered
-candidates) + 1 narrative call + **§3.9's review loop** ≈ 10–18 Claude
+query-planning call + ~8
+understanding calls (batched ~5 candidates each, over ~40 filtered
+candidates) + 1 narrative call + **§3.9's review loop** ≈ 10 Claude
 calls per curriculum before review, independent of `time_budget_minutes`.
 The review loop adds **1 reviewer call in the typical case** (draft
 approved on the first pass) and, worst case, up to 3 reviewer calls plus a
-handful of targeted re-narration calls (one per flagged pick, not a full
-re-run) — reselection itself is free, since it's the same deterministic
-code as §3.6/§3.7. So the realistic range is **~11–19** calls per
-curriculum, with the worst case (all 3 iterations used, several picks
-re-narrated each time) closer to **~25**. That worst case is rare by
-construction: most of what the reviewer would otherwise flag is caught by
-the deterministic anchoring in iteration 1 and fixed in one pass, not
-rediscovered by the LLM on each loop.
+handful of targeted re-narration calls — `agent/narrative.py`'s
+`generate_narrative` reuses the previous pass's phrasing verbatim for
+every unchanged, non-feedback-targeted pick, so only genuinely new or
+flagged picks cost an LLM call (a selection-only fix that just excludes a
+flagged candidate, with no replacement, costs **zero** re-narration
+calls) — reselection itself is free either way, since it's the same
+deterministic code as §3.6/§3.7. So the realistic range is **~11–15**
+calls per curriculum, with the worst case (all 3 iterations used, a
+genuinely new pick swapped in and re-narrated each time) closer to
+**~22**. That worst case is rare by construction: most of what the
+reviewer would otherwise flag is caught by the deterministic anchoring in
+iteration 1 and fixed in one pass, not rediscovered by the LLM on each
+loop.
 
-**Model tiering.** The high-volume understanding step and the scope-check
-gate (§0) use a cheaper/faster model; the single narrative/selection-
-sensitive step and the judge/reviewer use a stronger one — capability
-reserved for where it's actually load-bearing, not spent uniformly.
+**Model tiering.** The high-volume understanding step, the scope-check
+gate (§0), and the online reviewer (`agent/review.py`, gating every real
+run) use a cheaper/faster model — the reviewer's actual quality bar is
+still enforced by `critique.deterministic_issues`' anchoring (code, not an
+LLM judgment, §3.9), so a lighter model here trades away some of the LLM's
+own *supplementary* issue-spotting, not the hard checks. The narrative
+step and `eval/judge.py`'s offline grading of the test set use a stronger
+one — capability reserved for where it's actually load-bearing (phrasing
+quality, and the eval that's "graded most carefully," `CLAUDE.md`), not
+spent uniformly. Both paths call the same `agent/critique.py` rubric
+(`tier` is a parameter, not a second prompt) — only which model answers it
+differs.
 
 **Caching (the biggest lever at scale).** Understanding records are keyed
 by `video_id` and cached — a video's content doesn't change between one
@@ -891,7 +917,13 @@ discovery/understanding differs between the two variants and the cache
 A Streamlit-triggered run (§5.2) costs exactly what the equivalent CLI run
 would — same pipeline function, same call sites — the UI adds a rendering
 and chat layer, not new Claude calls beyond the follow-up Q&A calls §5.1
-already accounts for.
+already accounts for. The UI additionally keeps an exact-match run cache
+(`agent/run_cache.py`, sqlite, keyed on the full input payload +
+`enable_reviewer`): submitting the identical query twice through the
+Streamlit app costs **zero** Claude calls on the second submission — it
+re-loads the first run's saved trace instead of re-entering the graph.
+Deliberately exact-match only for now; similarity/fuzzy matching against
+near-identical queries is a named follow-up, not built here.
 
 ---
 
@@ -927,7 +959,8 @@ rc_assignment/
     scope_check.py            # §0's guardrail -- runs first, can short-circuit the run
     query_planning.py
     discovery.py              # yt-dlp search, behind a swappable interface
-    transcripts.py             # yt-dlp metadata + captions, cleanup
+    transcripts.py             # yt-dlp metadata (download-free) +
+                                # youtube-transcript-api for the transcript itself
     understanding.py            # grounded per-video LLM extraction,
                                  # incl. phase classification for §4's sequencing
     dedup.py                     # embedding clustering
@@ -942,6 +975,8 @@ rc_assignment/
     followup.py                          # bonus: Q&A over the trace
     llm_client.py                         # instrumented Claude wrapper, model tiering
     cache.py                               # sqlite cache keyed by video_id
+    run_cache.py                            # UI-only: exact-match run cache
+                                             # keyed by full input payload
     render.py                               # JSON + Markdown output
   eval/
     metrics.py                # §6.1's automated metrics -- also what review.py
