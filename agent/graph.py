@@ -14,7 +14,9 @@ graph-state counters/flags rather than LangGraph defaults:
 from __future__ import annotations
 
 import concurrent.futures
+import functools
 import sys
+import time
 from typing import Callable, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -90,6 +92,25 @@ def _log(stage: str, detail: str = "") -> None:
     print(f"[graph] {stage}{': ' + detail if detail else ''}", file=sys.stderr, flush=True)
     if _progress_cb is not None:
         _progress_cb(stage, detail)
+
+
+def _timed(stage: str, fn):
+    """Wrap a node so its wall-clock duration is recorded into the trace as
+    one `stage_latency` entry per visit -- feeds Trace.stage_rollup() and
+    run.py's end-of-run per-stage summary ("where did the time go", measured
+    rather than guessed)."""
+
+    @functools.wraps(fn)
+    def wrapper(state: PipelineState):
+        start = time.monotonic()
+        result = fn(state)
+        elapsed = time.monotonic() - start
+        state["trace"].data.setdefault("stage_latency", []).append(
+            {"stage": stage, "seconds": round(elapsed, 3)}
+        )
+        return result
+
+    return wrapper
 
 
 def _gate(state: PipelineState) -> dict:
@@ -288,19 +309,19 @@ def _out(state: PipelineState) -> dict:
 
 def build_graph():
     graph = StateGraph(PipelineState)
-    graph.add_node("gate", _gate)
-    graph.add_node("decline", _decline)
-    graph.add_node("qp", _qp)
-    graph.add_node("disc", _disc)
-    graph.add_node("fetch", _fetch)
-    graph.add_node("und", _und)
-    graph.add_node("dedup", _dedup)
-    graph.add_node("score", _score)
-    graph.add_node("sel", _sel)
-    graph.add_node("narr", _narr)
-    graph.add_node("render_draft", _render_draft)
-    graph.add_node("review", _review)
-    graph.add_node("out", _out)
+    graph.add_node("gate", _timed("gate", _gate))
+    graph.add_node("decline", _timed("decline", _decline))
+    graph.add_node("qp", _timed("qp", _qp))
+    graph.add_node("disc", _timed("disc", _disc))
+    graph.add_node("fetch", _timed("fetch", _fetch))
+    graph.add_node("und", _timed("und", _und))
+    graph.add_node("dedup", _timed("dedup", _dedup))
+    graph.add_node("score", _timed("score", _score))
+    graph.add_node("sel", _timed("sel", _sel))
+    graph.add_node("narr", _timed("narr", _narr))
+    graph.add_node("render_draft", _timed("render_draft", _render_draft))
+    graph.add_node("review", _timed("review", _review))
+    graph.add_node("out", _timed("out", _out))
 
     graph.set_entry_point("gate")
     graph.add_conditional_edges("gate", _route_gate, {"qp": "qp", "decline": "decline"})

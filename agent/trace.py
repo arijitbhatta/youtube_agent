@@ -35,6 +35,7 @@ class Trace:
             "selection_steps": [],
             "review_iterations": [],
             "llm_calls": [],
+            "stage_latency": [],
             "output": None,
         }
 
@@ -94,6 +95,18 @@ class Trace:
                 "timestamp": time.time(),
             }
         )
+
+    def stage_rollup(self) -> list[tuple[str, float, int]]:
+        """Aggregate recorded per-node timings into (stage, total_seconds,
+        visits), most expensive first -- what run.py prints at the end of a run
+        so "where did the time go" is measured rather than guessed. Empty if no
+        stage timings were recorded (e.g. a pre-instrumentation trace)."""
+        agg: dict[str, list[float]] = {}
+        for entry in self.data.get("stage_latency", []):
+            agg.setdefault(entry["stage"], []).append(entry["seconds"])
+        rows = [(stage, sum(times), len(times)) for stage, times in agg.items()]
+        rows.sort(key=lambda r: r[1], reverse=True)
+        return rows
 
     # --- persistence ---------------------------------------------------------
 

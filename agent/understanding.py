@@ -7,9 +7,12 @@ what style," including the `phase` label §4 later sequences by.
 """
 from __future__ import annotations
 
+import concurrent.futures
+
 from pydantic import BaseModel, Field
 
 from agent import cache
+from agent.config import UNDERSTAND_MAX_WORKERS
 from agent.llm_client import call_structured
 from agent.schemas import Candidate, PersonaInput, UnderstandingRecord
 
@@ -108,9 +111,7 @@ def understand_candidates(
         else:
             to_fetch.append(c)
 
-    new_records: list[UnderstandingRecord] = []
-    for i in range(0, len(to_fetch), BATCH_SIZE):
-        batch = to_fetch[i : i + BATCH_SIZE]
+    def _understand_batch(batch: list[Candidate]) -> list[UnderstandingRecord]:
         candidates_block = "\n---\n".join(_format_candidate(c) for c in batch)
         prompt = _PROMPT_TEMPLATE.format(
             goal=input_payload.goal,
@@ -130,6 +131,7 @@ def understand_candidates(
             trace_label="understanding",
         )
         valid_ids = {c.video_id for c in batch}
+        out: list[UnderstandingRecord] = []
         for record in result.records:
             if record.video_id not in valid_ids:
                 continue
@@ -145,7 +147,21 @@ def understand_candidates(
             record.overlaps_known = [
                 k for k in record.overlaps_known if k in input_payload.user_context.known
             ]
-            new_records.append(record)
+            out.append(record)
+        return out
+
+    new_records: list[UnderstandingRecord] = []
+    batches = [to_fetch[i : i + BATCH_SIZE] for i in range(0, len(to_fetch), BATCH_SIZE)]
+    if batches:
+        # The batched calls are I/O-bound (OpenRouter round-trips), so run them
+        # concurrently over a bounded pool (config.UNDERSTAND_MAX_WORKERS) --
+        # this collapses the stage from sum(latencies) to roughly max(latency).
+        # Futures are gathered in submission order so the returned record order
+        # still matches the candidate order (as the old sequential loop did).
+        with concurrent.futures.ThreadPoolExecutor(max_workers=UNDERSTAND_MAX_WORKERS) as pool:
+            futures = [pool.submit(_understand_batch, b) for b in batches]
+            for future in futures:
+                new_records.extend(future.result())
 
     cache.set_many({keys_by_video_id[r.video_id]: r for r in new_records})
     records.extend(new_records)

@@ -56,6 +56,14 @@ ENABLE_REVIEWER_DEFAULT = os.environ.get("ENABLE_REVIEWER_DEFAULT", "true").lowe
 # explicit bound rather than "one thread per candidate."
 FETCH_MAX_WORKERS = int(os.environ.get("FETCH_MAX_WORKERS", "8"))
 
+# Bounded concurrency for agent/understanding.py's batched LLM calls -- same
+# rationale as FETCH_MAX_WORKERS (I/O-bound round-trips dominate), but sized
+# for the OpenRouter API rather than YouTube's caption CDN. ~BATCH_SIZE-1 (7)
+# batches over the 40-candidate cap, so a small pool already collapses the
+# stage from sum() to max() latency. Raise only if the provider rate limit
+# allows it.
+UNDERSTAND_MAX_WORKERS = int(os.environ.get("UNDERSTAND_MAX_WORKERS", "4"))
+
 
 def api_key_present() -> bool:
     """Whether OPENROUTER_API_KEY is set. Checked before any live call site;

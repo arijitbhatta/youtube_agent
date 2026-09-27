@@ -15,6 +15,7 @@ from agent.config import ENABLE_REVIEWER_DEFAULT, OUTPUTS_DIR, api_key_present
 from agent.graph import run_pipeline
 from agent.render import render_markdown
 from agent.schemas import CurriculumOutput, OutOfScopeOutput, PersonaInput
+from agent.trace import Trace
 
 
 def run_from_payload(
@@ -61,6 +62,14 @@ def main() -> int:
     else:
         assert isinstance(output, CurriculumOutput)
         print(render_markdown(output))
+    rows = Trace.load(trace_path).stage_rollup()
+    if rows:
+        print("\n[stage latency]", file=sys.stderr)
+        for stage, seconds, visits in rows:
+            print(
+                f"  {stage:<16} {seconds:6.1f}s  ({visits} step{'s' if visits != 1 else ''})",
+                file=sys.stderr,
+            )
     print(f"\n(trace saved to {trace_path})", file=sys.stderr)
     return 0
 

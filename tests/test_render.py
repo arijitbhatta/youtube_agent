@@ -1,6 +1,7 @@
 """Lean learner-facing render (render_markdown_lean): keeps title/link/why and
-the budget summary, drops every internal surface -- warnings, confidence,
-grounded, evidence, review, goal coverage, and the ranked dropped list."""
+the video count, drops every internal surface -- warnings, confidence,
+grounded, evidence, review, goal coverage, the budget/time summary, and the
+ranked dropped list."""
 from __future__ import annotations
 
 from agent.render import render_markdown_lean
@@ -42,7 +43,8 @@ def test_lean_keeps_learner_essentials():
     assert "Git in One Hour" in md
     assert "https://youtube.com/watch?v=a" in md
     assert "Covers git init and first commits." in md
-    assert "of 120 min" in md
+    assert "2 videos" in md
+    assert "of 120 min" not in md
     assert "[Watch on YouTube]" in md
 
 
