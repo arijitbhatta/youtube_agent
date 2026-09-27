@@ -1,6 +1,5 @@
 # Learning Curriculum Builder — Approach
 
-RapidCanvas AI Engineer take-home. Full brief: `../rc_curriculum_assignment.pdf`.
 This file is the elevator pitch and the decisions; `HLD.md` is the detailed
 design. Nothing here is code yet — this is the plan.
 
@@ -9,10 +8,10 @@ design. Nothing here is code yet — this is the plan.
 Given `(goal, time_budget_minutes, user_context)`, produce a sequenced set of
 YouTube videos, totaling within the budget, that would actually get *this*
 learner (not a generic one) to the goal. How many videos that takes is an
-outcome of the goal's scope and the budget, not a fixed target — the brief's
+outcome of the goal's scope and the budget, not a fixed target — the spec's
 own reference sketch happens to land on 4–6 for its example persona, which is
 a property of that example, not a constraint on the agent (see "Scope
-decisions" below). The hard part is explicit in the brief:
+decisions" below). The hard part is explicit in the spec:
 search rank and view count optimize for popularity, not fit. Fit requires
 reading what a video actually teaches — transcript, not metadata — and
 weighing that against what the learner already knows, doesn't know, and
@@ -36,7 +35,7 @@ explicitly doesn't want.
    output artifact, not something reconstructed after the fact for the
    README. This is also what makes the optional follow-up Q&A almost free.
 4. **Evaluate what's verifiable; say plainly what isn't.** The eval is the
-   deliverable graded most carefully. It should measure real things
+   deliverable weighted most heavily. It should measure real things
    (budget adherence, coverage, redundancy, grounding) and state its blind
    spots rather than paper over them with an LLM-judge score.
 5. **Simple over impressive.** This is graded partly on *not*
@@ -57,7 +56,7 @@ whatever scale the task actually has:
 | Named, independently-testable stages | discovery → transcript fetch → understanding → dedup → selection → narration → review, as separate modules, each with a typed input/output, wired together as LangGraph nodes but individually unit-testable without the graph | The right way to make an LLM pipeline debuggable — a bad output should point at exactly which stage produced it, not require re-reading the whole run |
 | Right-sized model per step | Cheaper/faster model for the high-volume per-video extraction step and the scope-check gate; reserve the stronger model for the one narration/judgment/review step | Capability should be spent where it's actually load-bearing, not applied uniformly to every call regardless of how hard the task is |
 | Separate "the LLM call" from "the business logic around it" | `llm_client.py` is a thin, instrumented wrapper; nothing upstream of it does raw string parsing of a completion when a structured extraction would do | Don't let the slow, unreliable part hide inside logic that should be simple and testable |
-| Cost/scaling reasoning, on paper | Applied only in the cost section of the HLD (caching per `video_id`, model tiering, 10K-users/day extrapolation) | There's no real traffic here; building actual cache/queue infra now would be exactly the over-engineering the brief warns against — reasoning about cost still matters even when nothing is deployed |
+| Cost/scaling reasoning, on paper | Applied only in the cost section of the HLD (caching per `video_id`, model tiering, 10K-users/day extrapolation) | There's no real traffic here; building actual cache/queue infra now would be exactly the over-engineering the spec warns against — reasoning about cost still matters even when nothing is deployed |
 | Config-over-code seams | Discovery/transcript source is a swappable interface (`yt-dlp` now; YouTube Data API v3 documented as a drop-in alternative) selected by config, not a rewrite | The boundary that's most likely to need to move (search/caption reliability) is decided as a seam up front |
 | No infrastructure without a concurrent consumer to justify it | No queue, no workers, no retries-across-processes | Nothing here has concurrent consumers that would need it. A plain `try`/retry-twice inside one function covers the actual failure mode (a flaky network call) |
 
@@ -65,13 +64,13 @@ The short version: the discipline (named stages, config seams, separating
 unreliable calls from logic, thinking in cost-per-request) is worth having
 regardless of scale; the infrastructure (workers, queues, managed
 databases) is not, at this scale. This task's scope doesn't justify the
-latter, and the brief says so directly ("clean simple code... not a clever
+latter, and the spec says so directly ("clean simple code... not a clever
 framework").
 
 ## Scope decisions
 
 - **Discovery + metadata: `yt-dlp`. Transcript: `youtube-transcript-api`.**
-  Zero extra credentials beyond the Claude key already provided — a grader
+  Zero extra credentials beyond the Claude key already provided — anyone
   can `pip install` and run with nothing else to provision. `yt-dlp` gives
   search (`ytsearchN:`) and full metadata; the transcript itself comes from
   `youtube-transcript-api`, a dedicated library talking to YouTube's caption
@@ -89,7 +88,7 @@ framework").
   run.py --input test_set/weekend_react_dev.json` — remains the primary,
   always-available interface. A thin Streamlit front-end (`HLD.md` §5.2) is
   added on top of it, not instead of it: this is an explicit ask, not
-  something the brief itself requires, so it's kept deliberately minimal —
+  something the spec itself requires, so it's kept deliberately minimal —
   it imports `run.py`'s entrypoint and `agent/followup.py` directly, adds no
   new pipeline logic, and exists to make "chat with the output" (why was
   video X skipped, why is this ordered before that) interactive instead of
@@ -146,7 +145,7 @@ framework").
   never runs, zero extra calls). `eval/run_eval.py --compare-reviewer` runs
   the full test set under both settings and diffs §6.1's metrics, §6.2's
   judge score, and §6.3's human calibration between them — this is also
-  where the brief's own ask to "surface places where the eval and human
+  where the spec's own ask to "surface places where the eval and human
   judgment disagree" gets applied to a concrete design choice (is the
   reviewer worth its cost) instead of only to the pipeline's output.
 - **Docker as an optional packaging convenience, not a requirement.** The

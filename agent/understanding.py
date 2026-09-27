@@ -1,7 +1,7 @@
 """Content understanding -- the grounding step (HLD.md §3.4). Batched
 Claude calls (BATCH_SIZE candidates/call) turn each transcript (or bare
 metadata, if no transcript) into the structured UnderstandingRecord from
-§2.3 -- this answers the brief's actual hard problem: not "does this look
+§2.3 -- this answers the spec's actual hard problem: not "does this look
 relevant" but "what does this video actually teach, at what depth, in
 what style," including the `phase` label §4 later sequences by.
 """

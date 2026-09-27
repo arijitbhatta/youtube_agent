@@ -10,7 +10,7 @@ from statistics import mean
 
 from agent.schemas import CurriculumOutput, ScoredCandidate
 
-BUDGET_UNDER_TOLERANCE = 0.25  # §6.1: ~25% under is fine; the brief's own sketch is ~17% under
+BUDGET_UNDER_TOLERANCE = 0.25  # §6.1: ~25% under is fine; the spec's own sketch is ~17% under
 PHASE_ORDER = {"setup": 0, "concept": 1, "hands-on-project": 2, "advanced-followup": 3}
 
 

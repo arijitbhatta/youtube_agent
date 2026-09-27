@@ -29,7 +29,7 @@ depends on it.
    candidate, every score, every review iteration, why anything was cut)
    is a first-class output artifact, not reconstructed after the fact.
 4. **Evaluate what's verifiable; say plainly what isn't.** The eval is
-   graded most carefully. Measure real things; state blind spots in the
+   weighted most heavily. Measure real things; state blind spots in the
    doc rather than papering over them with a single LLM-judge score.
 5. **Simple over impressive.** No queues, workers, or managed infra — there
    is no concurrency requirement here. The pipeline is built as a

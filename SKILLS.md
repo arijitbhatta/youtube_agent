@@ -16,7 +16,7 @@ turned out to be, what was decided, and where it landed.
 
 **Question:** how much of a larger, previously-built RAG system's
 engineering pattern should transfer to a single-user, no-concurrency
-take-home?
+project?
 
 **Resolution:** transfer the *habits* — named, independently-testable
 pipeline stages; a cheap model for high-volume extraction and a stronger
@@ -42,13 +42,13 @@ budget is defined?"
 as a hard ceiling (never exceed it). But the evaluation section had a
 *symmetric* ±15% tolerance around that budget — which would fail the
 brief's own reference sketch, since that sketch lands ~17% *under* a
-360-minute budget. A metric that flags the brief's own worked example as
+360-minute budget. A metric that flags the spec's own worked example as
 a failure is wrong, not the example.
 
 **Decision:** grade budget compliance asymmetrically. Overage is a hard
 fail (the selection algorithm makes it structurally impossible, so any
 overage means a bug, not a debatable call). Undershooting is graded
-loosely, up to ~25%, reasoned directly from the brief's own sketch rather
+loosely, up to ~25%, reasoned directly from the spec's own sketch rather
 than picked arbitrarily.
 
 **Where:** `HLD.md` §4 (budget definition) and §6.1 (asymmetric tolerance
@@ -248,7 +248,7 @@ correctly scoped), §9, §10 (row 4), §11.
 
 ---
 
-### 10. There is no 4–6 constraint — that was the sample's number, not the brief's
+### 10. There is no 4–6 constraint — that was the sample's number, not the spec's
 
 **Trigger (explicit correction):** "There is no constraint of 4-6 videos
 btw. It was provided for the sample example. Don't put any constraint on
@@ -260,7 +260,7 @@ in §4 step 3 that wouldn't let a curriculum fall below 4 picks, a greedy
 pass in step 1 that capped out at 6, an eval metric ("count sanity")
 literally graded against the range 4–6, and the same number repeated as
 if it were given in `APPROACH.md`'s problem statement and `CLAUDE.md`'s
-one-line description. None of that came from the brief; it came from
+one-line description. None of that came from the spec; it came from
 copying the reference sketch's output size into the spec.
 
 **Decision:** remove every count target from the algorithm, not just the
@@ -319,7 +319,7 @@ decision, discipline table), `HLD.md` §1, §2, §3.9, §9, §10 (steps 8-9),
 
 **Trigger (explicit request):** "come up with two versions one without LLM
 judge reviewer in the pipeline and other one with judge. compare them as
-well as mentioned in assignment pdf. At the same time keep a streamlit
+well as mentioned in the plan. At the same time keep a streamlit
 based frontend so that I can chat with the output like why some videos have
 been skipped etc. Think if docker container can be used here."
 
@@ -331,7 +331,7 @@ been skipped etc. Think if docker container can be used here."
   ignored." `eval/run_eval.py --compare-reviewer` runs the seven test-set
   scenarios under both settings and diffs §6.1's metrics, §6.2's judge
   score, and an extended §6.3 human calibration between them. This is
-  explicitly where the brief's "surface where the eval and human judgment
+  explicitly where the spec's "surface where the eval and human judgment
   disagree" line (asked about separately, same session) gets applied to a
   concrete design choice rather than only to curriculum output — and the
   honest expectation is stated up front: on legitimate test-set input the
@@ -527,7 +527,7 @@ second judgment prompt (CLAUDE.md: `agent/critique.py` stays the single
 source of truth). `agent/review.py::run_review` -- the path every real
 user request goes through -- passes `tier="cheap"` explicitly.
 `eval/judge.py` keeps the untouched `"strong"` default, since CLAUDE.md
-calls the eval "graded most carefully." Which call site gets the
+calls the eval "weighted most heavily." Which call site gets the
 lightweight model was a judgment call made per that stated priority, not
 asked about. **Live-verified**: every `critique`-labeled call in both
 verification traces used `anthropic/claude-haiku-4.5`; every `narrative`

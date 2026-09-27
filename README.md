@@ -16,7 +16,7 @@ one to know what was done, what it scored, and how to run it.
 
 ## What we solved
 
-The brief's hard problem, restated: **YouTube search rank and view counts
+The spec's hard problem, restated: **YouTube search rank and view counts
 optimize for popularity, not for whether a video actually gets *this*
 learner to *this* goal.** A beginner React video and an advanced React
 deep-dive both rank well for "React"; metadata can't tell them apart. The
@@ -144,7 +144,7 @@ docker compose run cli --input test_set/01_weekend_react_dev.json
 docker compose up ui   # http://localhost:8501
 ```
 
-`pip install` + `python run.py` remains the documented default — the brief's
+`pip install` + `python run.py` remains the documented default — the spec's
 "zero extra credentials" promise is a feature, not an accident.
 
 ---
@@ -310,7 +310,7 @@ more time" below.
 ## Directory / file map
 
 ```
-rc_assignment/
+youtube_agent/
 ├── run.py                     # CLI entry point: `python run.py --input <persona.json>`
 ├── requirements.txt           # deps; openai (OpenRouter), langgraph, yt-dlp, youtube-transcript-api, streamlit
 ├── .env.example               # template: OPENROUTER_API_KEY + model slugs + cache path (→ copy to .env, never committed)
@@ -363,8 +363,6 @@ rc_assignment/
 │   ├── test_followup.py, test_narrative.py, test_render.py, test_recommendations.py, test_progress.py
 ├── ui/
 │   └── app.py                 # §5.2 Streamlit viewer — imports run.py + followup.py, no logic of its own
-├── notebooks/
-│   └── query_transcript_probe.ipynb        # scratch: probing discovery/transcript behavior
 └── outputs/                   # gitignored — traces, rendered output, eval_report_*.json, cache.sqlite3
 ```
 

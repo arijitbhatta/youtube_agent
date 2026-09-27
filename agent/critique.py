@@ -213,8 +213,7 @@ def evaluate(
     `approved` is forced False whenever any exist, or whenever the LLM's
     own verdict raised a blocking issue, regardless of the LLM's own
     top-level `approved` field. `tier` defaults to "strong" (eval/judge.py's
-    offline grading stays untouched, per CLAUDE.md's "the eval is graded
-    most carefully"); agent/review.py's online path passes tier="cheap"
+    offline grading stays untouched, per CLAUDE.md's "the eval matters most"); agent/review.py's online path passes tier="cheap"
     explicitly."""
     det_issues = deterministic_issues(output, picks_in_order, candidate_pool)
     try:

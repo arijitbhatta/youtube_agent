@@ -126,7 +126,7 @@ These same models compose into the single state object that flows through
 `agent/graph.py`'s LangGraph nodes (§1) — the graph doesn't define its own
 separate shapes; it accumulates exactly these contracts as it runs.
 
-### 2.1 Input (matches the brief's persona schema exactly)
+### 2.1 Input (matches the spec's persona schema exactly)
 
 ```json
 {
@@ -318,7 +318,7 @@ Batched Claude calls (e.g. 5 candidates per call to hold down call count),
 each producing the structured understanding record from §2.3, conditioned
 on the actual transcript excerpt (or, if unavailable, explicitly told it
 only has metadata — this is what sets `grounded: false` and depresses
-`confidence`). This is the step that answers the brief's actual hard
+`confidence`). This is the step that answers the spec's actual hard
 problem: not "does this look relevant" but "what does this video actually
 teach, at what depth, in what style." It also classifies `phase` here —
 the pedagogical role each candidate plays (setup, concept, hands-on
@@ -519,7 +519,7 @@ search rather than an ILP solver — at 40–80 candidates this is simple,
 fast, and easy to explain in a README, which matters more here than
 provable optimality:
 
-**No target video count anywhere in this algorithm.** The brief's own
+**No target video count anywhere in this algorithm.** The spec's own
 reference sketch happens to land on 4–6 videos for its example persona —
 that's a property of *that* persona's goal and budget, not a constraint
 on the agent. A narrow goal with a tight budget can validly produce two
@@ -622,8 +622,7 @@ replacement path that the eval harness or grading depends on.
 
 ## 6. Evaluation design
 
-This is the deliverable the brief says it reads most carefully, so it gets
-the most detail here.
+This is the most important deliverable, so it gets the most detail here.
 
 ### 6.1 Automated, reference-free metrics (run against every test-set scenario)
 
@@ -632,7 +631,7 @@ tolerance: §4's algorithm already makes overage structurally impossible,
 so any overage is a hard fail (it means the selection code has a bug, not
 that it made a debatable call). Undershooting is graded loosely — the
 brief's own reference sketch lands ~17% under a 360-minute budget (~5
-hours picked), so anything tighter than that would flag the brief's own
+hours picked), so anything tighter than that would flag the spec's own
 example as a failure. ~25% under is treated as fine; something like 50%
 under (padding out four low-utility picks instead of finding five better
 ones, or worse, only surfacing two decent videos) is a real signal that
@@ -728,7 +727,7 @@ not something to quietly tighten away before submission.
 ### 6.5 Signals considered and discarded
 
 - **View count / like count as a relevance signal.** Discarded from
-  scoring entirely — the brief states outright that these don't solve the
+  scoring entirely — the spec states outright that these don't solve the
   problem, and they correlate with production polish more than fit for a
   specific learner. Kept only as a last-resort tie-breaker between two
   candidates that score identically on everything else.
@@ -744,7 +743,7 @@ not something to quietly tighten away before submission.
   Vite) a candidate whose transcript describes since-removed APIs is
   penalized through `constraint_violations`/depth mismatch surfaced by the
   understanding step, not through a blanket recency score.
-- **Comment mining.** The brief itself names comments as a scattered
+- **Comment mining.** The spec itself names comments as a scattered
   signal ("skip to 4:30, the first half is fluff" is exactly the kind of
   thing a comment reveals that metadata never will). This is also the most
   direct real *quality* signal available anywhere in this problem — unlike
@@ -760,7 +759,7 @@ not something to quietly tighten away before submission.
 
 **Trigger (explicit request):** produce two versions of the pipeline — one
 without the LLM reviewer/judge in the loop, one with — and compare them the
-way the brief's evaluation section asks: surfacing disagreement between the
+way the spec's evaluation section asks: surfacing disagreement between the
 eval and human judgment, and naming signals considered but discarded.
 
 **What "two versions" means here, concretely.** Not two codebases and not a
@@ -882,7 +881,7 @@ LLM judgment, §3.9), so a lighter model here trades away some of the LLM's
 own *supplementary* issue-spotting, not the hard checks. The narrative
 step and `eval/judge.py`'s offline grading of the test set use a stronger
 one — capability reserved for where it's actually load-bearing (phrasing
-quality, and the eval that's "graded most carefully," `CLAUDE.md`), not
+quality, and the eval that's "weighted most heavily," `CLAUDE.md`), not
 spent uniformly. Both paths call the same `agent/critique.py` rubric
 (`tier` is a parameter, not a second prompt) — only which model answers it
 differs.
@@ -930,7 +929,7 @@ near-identical queries is a named follow-up, not built here.
 ## 9. Proposed repo structure
 
 ```
-rc_assignment/
+youtube_agent/
   APPROACH.md              # this decision doc (done)
   HLD.md                   # this design doc (done)
   README.md                # written once the agent exists: setup, run,
