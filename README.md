@@ -387,3 +387,35 @@ youtube_agent/
   isolates the reviewer's effect instead of discovery noise.
 - **Comment-mining as a second, third-party quality signal** — the one lever
   that would close the grounding/quality gap the rest of the pipeline can't.
+## High-level build notes
+
+- **No multimodal.** Text-only end to end — the pipeline reads transcripts and
+  metadata, never video/audio frames, because multimodal processing would be
+  too expensive.
+- **No async, no SSE for the download path.** Fetch stays synchronous —
+  download-free `yt-dlp` calls behind a bounded thread pool — rather than async
+  I/O or server-sent events.
+- **Only `yt-dlp` and `youtube-transcript-api`.** These are the only two
+  discovery/transcript dependencies; no YouTube Data API key or anything else.
+- **Caption CDN / IP-level `429`.** A retry + sleep is added, but the block is
+  IP-based, so on a throttled network it still fails (documented above).
+- **Candidate pool 80 → 40.** Discovery was capped from 80 down to 40
+  candidates to cut latency.
+- **Embeddings: sentence-transformers → OpenAI.** The local model was burning
+  time in torch, so dedup embeddings moved to hosted OpenAI
+  `text-embedding-3-small`.
+- **Query routing up front.** A cheap scope-check/planning pass at the very
+  start routes (or declines) the request before the expensive stages run.
+- **Query caching in Streamlit.** An exact-match run cache
+  (`agent/run_cache.py`) re-serves an identical query without re-running the
+  pipeline.
+- **Latency is still high — called out honestly.** ~4–5 min wall-clock per run
+  is reported in the results rather than hidden.
+- **No wholesale narrative regeneration; a lightweight judge.** Narrative only
+  re-runs for review-flagged picks (unchanged picks keep their phrasing), and
+  the judge is shifted to a very lightweight model.
+- **Books panel.** A "while you waited" book/course suggestion surface
+  (`agent/recommendations.py`) was added to the UI.
+- **Streaming in the chat section.** The follow-up chat streams its responses.
+- **The chatbot answers more questions.** The follow-up Q&A reaches beyond
+  "why was video X skipped" into the rest of the trace.
