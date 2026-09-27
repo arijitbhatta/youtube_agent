@@ -171,7 +171,7 @@ def render_markdown_lean(output: CurriculumOutput) -> str:
     lines = [
         "# Your learning plan",
         "",
-        f"**{n} {noun} · {output.total_minutes:.0f} of {output.budget_minutes} min**",
+        f"**{n} {noun}**",
         "",
     ]
     for item in output.curriculum:

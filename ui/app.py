@@ -33,11 +33,6 @@ from run import run_from_payload
 
 TEST_SET_DIR = REPO_ROOT / "test_set"
 
-# The UI no longer exposes a time-budget field; new-persona runs use a fixed
-# default budget instead (the selected set is an outcome of it, not an input
-# the reader is meant to tune from here).
-DEFAULT_TIME_BUDGET_MINUTES = 120
-
 # How long a run may take before we surface "also consider" book/course
 # recommendations -- surfaced *mid-run* (not after), so the learner has
 # something to look at while the pipeline is still working. That needs a
@@ -248,6 +243,7 @@ with st.sidebar:
         with st.form("new_persona_form"):
             persona_id = st.text_input("Persona ID", value="ui_session")
             goal = st.text_area("Goal", value="")
+            time_budget_minutes = st.number_input("Time budget (minutes)", min_value=1, value=120)
             background = st.text_area("Background", value="")
             known = st.text_input("Already known (comma-separated)", value="")
             unknown = st.text_input("Wants to learn / unknown (comma-separated)", value="")
@@ -263,7 +259,7 @@ with st.sidebar:
                 input_payload = PersonaInput(
                     persona_id=persona_id or "ui_session",
                     goal=goal,
-                    time_budget_minutes=DEFAULT_TIME_BUDGET_MINUTES,
+                    time_budget_minutes=int(time_budget_minutes),
                     user_context=UserContext(
                         background=background,
                         known=[s.strip() for s in known.split(",") if s.strip()],
