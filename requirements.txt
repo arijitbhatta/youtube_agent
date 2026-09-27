@@ -3,6 +3,7 @@ openai>=1.50   # OpenRouter is OpenAI-Chat-Completions-compatible; used for
                # embeddings (agent/llm_client.call_embeddings, §3.5) --
                # same client, same key, no separate embedding runtime
 langgraph>=0.2
+langsmith>=0.1      # LangSmith observability (config.py LANGCHAIN_*; see README)
 pydantic>=2
 yt-dlp>=2024.10
 youtube-transcript-api>=0.6.2  # transcript fetch (agent/transcripts.py,

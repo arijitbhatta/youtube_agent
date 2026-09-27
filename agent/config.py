@@ -30,6 +30,16 @@ MODEL_EMBEDDING = os.environ.get("MODEL_EMBEDDING", "openai/text-embedding-3-sma
 # anonymous per-IP daily quota that's already exhausted in this environment
 # (429 "Queries per day"); a free per-project key raises that ceiling.
 GOOGLE_BOOKS_API_KEY = os.environ.get("GOOGLE_BOOKS_API_KEY", "")
+
+# Optional LangSmith observability. LangGraph auto-traces the pipeline when
+# LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY are set; llm_client.py
+# additionally wraps the OpenAI client (langsmith.wrappers.wrap_openai) so
+# each raw model call is its own span. LANGSMITH_ENABLED gates that wrapper.
+LANGCHAIN_API_KEY = os.environ.get("LANGCHAIN_API_KEY", "")
+LANGCHAIN_PROJECT = os.environ.get("LANGCHAIN_PROJECT", "youtube_agent")
+LANGSMITH_ENABLED = os.environ.get("LANGCHAIN_TRACING_V2", "false").lower() == "true" and bool(
+    LANGCHAIN_API_KEY
+)
 CACHE_PATH = REPO_ROOT / os.environ.get("CACHE_PATH", "outputs/cache.sqlite3")
 OUTPUTS_DIR = REPO_ROOT / "outputs"
 

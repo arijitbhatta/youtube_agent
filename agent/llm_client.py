@@ -17,7 +17,13 @@ import numpy as np
 import openai
 from pydantic import BaseModel, ValidationError
 
-from agent.config import MODEL_CHEAP, MODEL_EMBEDDING, MODEL_STRONG, OPENROUTER_BASE_URL
+from agent.config import (
+    LANGSMITH_ENABLED,
+    MODEL_CHEAP,
+    MODEL_EMBEDDING,
+    MODEL_STRONG,
+    OPENROUTER_BASE_URL,
+)
 
 T = TypeVar("T", bound=BaseModel)
 Tier = Literal["cheap", "strong"]
@@ -36,6 +42,17 @@ def _get_client() -> openai.OpenAI:
             api_key=os.environ.get("OPENROUTER_API_KEY"),
             timeout=60.0,  # the SDK default (600s) is too long to fail fast on
         )
+        # LangSmith observability (config.LANGSMITH_ENABLED): wrap the client
+        # so each chat/embeddings call is traced as its own span. Lazy import
+        # + ImportError guard so an uninstalled langsmith (tracing off) can
+        # never break an otherwise-untraced run.
+        if LANGSMITH_ENABLED:
+            try:
+                from langsmith.wrappers import wrap_openai
+
+                _client = wrap_openai(_client)
+            except ImportError:
+                pass
     return _client
 
 

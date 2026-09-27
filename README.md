@@ -419,3 +419,7 @@ youtube_agent/
 - **Streaming in the chat section.** The follow-up chat streams its responses.
 - **The chatbot answers more questions.** The follow-up Q&A reaches beyond
   "why was video X skipped" into the rest of the trace.
+- **LangSmith observability.** LangGraph auto-traces the pipeline, and the
+  OpenAI client is wrapped (`langsmith`'s `wrap_openai`) so each model call is
+  its own span; enable with `LANGCHAIN_TRACING_V2=true` + `LANGCHAIN_API_KEY`
+  in `.env`.
